@@ -1,13 +1,15 @@
-import json
+import os
+import logging
 import os
 import subprocess
 import sys
-from shutil import which
+import webbrowser
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QPushButton, QTextEdit, QVBoxLayout, QWidget,
-    QMessageBox, QComboBox, QFileDialog, QLabel, QDialog, QFormLayout, QLineEdit
+    QPushButton, QTextEdit, QVBoxLayout, QMessageBox, QComboBox, QFileDialog, QLabel, QDialog,
+    QFormLayout, QLineEdit,
+    QHBoxLayout, QProgressBar
 )
 
 
@@ -256,27 +258,25 @@ class InstallWorker(QThread):
             self.finish_signal.emit(False)
 
 
-class OllamaSettings(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("OllamaAgent")
-        self.setGeometry(100, 100, 600, 400)
+class OllamaSettings(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Настройки Ollama")
+        self.setMinimumWidth(400)
 
-        self.status_text = QTextEdit()
-        self.status_text.setReadOnly(True)
+        layout = QVBoxLayout(self)
 
-        self.check_btn = QPushButton("Проверить Ollama")
-        self.install_model_btn = QPushButton("Установить модель")
-        self.cancel_btn = QPushButton("Отменить установку")
-        self.cancel_btn.setEnabled(False)
-        self.list_model_btn = QPushButton("Обновить список моделей")
-        self.delete_model_btn = QPushButton("Удалить модель")
-        self.show_details_btn = QPushButton("Детали выбранной модели")
+        # Группа установки модели
+        install_group = QVBoxLayout()
 
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(False)
-        self.model_combo.currentIndexChanged.connect(self.update_selected_model)
+        # Заголовок
+        header = QLabel("Установка модели")
+        header.setStyleSheet("font-weight: bold; font-size: 14px;")
+        install_group.addWidget(header)
 
+        # Рекомендуемые модели
+        recommended_label = QLabel("Рекомендуемые модели:")
+        install_group.addWidget(recommended_label)
         self.recommended_combo = QComboBox()
         self.recommended_combo.addItems([
             "phi3:3.8b (Intel CPU-оптимизированная)",
@@ -284,36 +284,118 @@ class OllamaSettings(QMainWindow):
             "qwen2.5-coder:3b (Код-ревью)"
         ])
         self.recommended_combo.currentTextChanged.connect(self.update_model_input)
-
-        self.model_name_input = QLineEdit()
-        self.model_name_input.setPlaceholderText("Имя модели (например: phi3:3.8b)")
-
-        self.select_dir_btn = QPushButton("Выбрать папку для установки")
-        self.selected_dir_label = QLabel()
-
-        layout = QVBoxLayout()
-        layout.addWidget(self.check_btn)
-
-        install_group = QVBoxLayout()
-        install_group.addWidget(QLabel("Рекомендуемые модели:"))
         install_group.addWidget(self.recommended_combo)
-        install_group.addWidget(self.model_name_input)
-        install_group.addWidget(self.select_dir_btn)
-        install_group.addWidget(self.install_model_btn)
-        install_group.addWidget(self.cancel_btn)
+
+        # Поле ввода и кнопки
+        input_layout = QHBoxLayout()
+
+        # Поле ввода модели
+        self.model_input = QLineEdit()
+        self.model_input.setPlaceholderText("Введите имя модели...")
+        self.model_input.setMinimumWidth(200)  # Минимальная ширина поля ввода
+        input_layout.addWidget(self.model_input, stretch=1)  # Растягиваем поле ввода
+
+        # Кнопка перехода в библиотеку
+        library_button = QPushButton("📚")
+        library_button.setToolTip("Открыть библиотеку моделей Ollama")
+        library_button.setFixedWidth(40)
+        library_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #1565C0;
+            }
+        """)
+        library_button.clicked.connect(self.open_ollama_library)
+        input_layout.addWidget(library_button)
+
+        # Кнопка установки
+        self.install_button = QPushButton("Установить")
+        self.install_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:pressed {
+                background-color: #3d8b40;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+            }
+        """)
+        self.install_button.clicked.connect(self.install_model)
+        input_layout.addWidget(self.install_button)
+
+        install_group.addLayout(input_layout)
         layout.addLayout(install_group)
 
+        # Кнопка проверки Ollama
+        self.check_btn = QPushButton("Проверить Ollama")
+        layout.addWidget(self.check_btn)
+
+        # Кнопка отмены установки
+        self.cancel_btn = QPushButton("Отменить установку")
+        self.cancel_btn.setEnabled(False)
+        layout.addWidget(self.cancel_btn)
+
+        # Выбор директории установки
+        dir_layout = QHBoxLayout()
+        self.select_dir_btn = QPushButton("Выбрать папку для установки")
+        dir_layout.addWidget(self.select_dir_btn)
+        self.selected_dir_label = QLabel()
+        dir_layout.addWidget(self.selected_dir_label)
+        layout.addLayout(dir_layout)
+
+        # Список установленных моделей
         layout.addWidget(QLabel("Установленные модели:"))
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(False)
+        self.model_combo.currentIndexChanged.connect(self.update_selected_model)
         layout.addWidget(self.model_combo)
-        layout.addWidget(self.list_model_btn)
-        layout.addWidget(self.delete_model_btn)
-        layout.addWidget(self.show_details_btn)
-        layout.addWidget(self.selected_dir_label)
+
+        buttons_layout = QHBoxLayout()
+        self.list_model_btn = QPushButton("Обновить список")
+        self.delete_model_btn = QPushButton("Удалить")
+        self.show_details_btn = QPushButton("Детали")
+        buttons_layout.addWidget(self.list_model_btn)
+        buttons_layout.addWidget(self.delete_model_btn)
+        buttons_layout.addWidget(self.show_details_btn)
+        layout.addLayout(buttons_layout)
+
+        # Лог
+        self.status_text = QTextEdit()
+        self.status_text.setReadOnly(True)
         layout.addWidget(self.status_text)
 
-        container = QWidget()
-        container.setLayout(layout)
-        self.setCentralWidget(container)
+        # Инициализация остальных переменных
+        self.install_dir = os.path.expanduser("~/.ollama")
+        self.selected_model_name = None
+        self.models_info = []
+        self.worker = None
+        self.current_model = None
+
+        # Подключение сигналов
+        self.check_btn.clicked.connect(self.check_ollama)
+        self.cancel_btn.clicked.connect(self.cancel_install)
+        self.list_model_btn.clicked.connect(self.update_model_list)
+        self.delete_model_btn.clicked.connect(self.delete_model)
+        self.select_dir_btn.clicked.connect(self.select_install_dir)
+        self.show_details_btn.clicked.connect(self.show_model_details)
 
         # Читаем системную переменную OLLAMA_MODELS
         models_dir = self.get_system_env_variable("OLLAMA_MODELS")
@@ -322,22 +404,9 @@ class OllamaSettings(QMainWindow):
             self.log(f"Найдена системная переменная OLLAMA_MODELS: {self.install_dir}")
         else:
             self.install_dir = os.path.expanduser("~/.ollama")
-            self.log(
-                f"Системная переменная OLLAMA_MODELS не найдена, используется путь по умолчанию: {self.install_dir}")
+            self.log(f"Системная переменная OLLAMA_MODELS не найдена, используется путь по умолчанию: {self.install_dir}")
 
         self.selected_dir_label.setText(f"Папка: {self.install_dir}")
-        self.selected_model_name = None
-        self.models_info = []
-        self.worker = None
-        self.current_model = None
-
-        self.check_btn.clicked.connect(self.check_ollama)
-        self.install_model_btn.clicked.connect(self.start_install)
-        self.cancel_btn.clicked.connect(self.cancel_install)
-        self.list_model_btn.clicked.connect(self.update_model_list)
-        self.delete_model_btn.clicked.connect(self.delete_model)
-        self.select_dir_btn.clicked.connect(self.select_install_dir)
-        self.show_details_btn.clicked.connect(self.show_model_details)
 
     def log(self, message: str):
         from datetime import datetime
@@ -487,10 +556,10 @@ class OllamaSettings(QMainWindow):
 
     def update_model_input(self, combo_text):
         model_name = combo_text.split(" (")[0]
-        self.model_name_input.setText(model_name)
+        self.model_input.setText(model_name)
 
     def start_install(self):
-        model_name = self.model_name_input.text().strip() or \
+        model_name = self.model_input.text().strip() or \
                      self.recommended_combo.currentText().split(" (")[0]
         if not model_name:
             self.log("Ошибка: Не указано имя модели")
@@ -504,7 +573,7 @@ class OllamaSettings(QMainWindow):
 
         # Активируем кнопку отмены и блокируем кнопку установки
         self.cancel_btn.setEnabled(True)
-        self.install_model_btn.setEnabled(False)
+        self.install_button.setEnabled(False)
 
     def cancel_install(self):
         if self.worker:
@@ -531,17 +600,17 @@ class OllamaSettings(QMainWindow):
                 self.log("Загруженные части сохранены для возможности продолжения")
 
             self.cancel_btn.setEnabled(False)
-            self.install_model_btn.setEnabled(True)
+            self.install_button.setEnabled(True)
 
     def install_finished(self, success):
         # Восстанавливаем состояние кнопок
         self.cancel_btn.setEnabled(False)
-        self.install_model_btn.setEnabled(True)
+        self.install_button.setEnabled(True)
 
         if success:
             self.update_model_list()
             self.log(
-                f"Модель {self.model_name_input.text()} установлена в {self.install_dir}/models/{self.model_name_input.text()}!")
+                f"Модель {self.model_input.text()} установлена в {self.install_dir}/models/{self.model_input.text()}!")
         else:
             self.log("Установка прервана или завершилась с ошибкой")
 
@@ -580,3 +649,34 @@ class OllamaSettings(QMainWindow):
         except Exception as e:
             self.log(f"Ошибка чтения переменной {name}: {str(e)}")
             return ""
+
+    def open_ollama_library(self):
+        """Открыть библиотеку моделей Ollama в браузере"""
+        try:
+            webbrowser.open("https://ollama.com/library")
+        except Exception as e:
+            logging.error(f"Ошибка при открытии библиотеки моделей: {str(e)}")
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Не удалось открыть библиотеку моделей. Пожалуйста, перейдите по адресу https://ollama.com/library вручную."
+            )
+
+    def install_model(self):
+        """Обработчик нажатия кнопки установки модели"""
+        model_name = self.model_input.text().strip()
+        if not model_name:
+            model_name = self.recommended_combo.currentText().split(" (")[0]
+            if not model_name:
+                self.log("Ошибка: Не указано имя модели")
+                return
+
+        self.current_model = model_name
+        self.worker = InstallWorker(model_name, self.install_dir)
+        self.worker.log_signal.connect(self.log)
+        self.worker.finish_signal.connect(self.install_finished)
+        self.worker.start()
+
+        # Блокируем кнопку установки и активируем кнопку отмены
+        self.install_button.setEnabled(False)
+        self.cancel_btn.setEnabled(True)

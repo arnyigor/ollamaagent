@@ -1,6 +1,7 @@
 import logging
 import subprocess
 import sys
+import time
 
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread
 from PyQt6.QtGui import QAction
@@ -8,10 +9,11 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QComboBox, QLabel,
     QSplitter, QFrame, QScrollArea, QSpinBox, QDoubleSpinBox,
-    QMessageBox
+    QMessageBox, QMenu, QGroupBox, QFormLayout
 )
 
 from ollama_api import OllamaAPI
+from ollama_settings import OllamaSettings
 
 # Настройка логирования
 logging.basicConfig(
@@ -90,7 +92,12 @@ class ChatHistory(QScrollArea):
 
         # Текстовое поле для истории чата
         self.chat_text = QTextEdit()
-        self.chat_text.setReadOnly(True)
+        self.chat_text.setReadOnly(True)  # Только для чтения, но можно копировать
+        self.chat_text.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.TextSelectableByKeyboard |
+            Qt.TextInteractionFlag.LinksAccessibleByMouse
+        )
         self.chat_text.setStyleSheet("""
             QTextEdit {
                 background-color: white;
@@ -129,19 +136,34 @@ class ChatHistory(QScrollArea):
             }
         """)
 
-    def add_message(self, text: str, is_user: bool = False):
+    def add_message(self, text: str, is_user: bool = False, performance_info: dict = None):
         """Добавление нового сообщения в чат"""
         # Форматируем сообщение
         sender = "Вы" if is_user else "Ассистент"
         color = "#2962FF" if is_user else "#00838F"
+        bg_color = "#F5F5F5" if is_user else "#FFFFFF"
         
         # Добавляем сообщение в формате HTML
         message_html = f"""
-            <div style="margin-bottom: 10px;">
-                <div style="font-weight: bold; color: {color};">{sender}:</div>
-                <div style="margin-left: 10px; white-space: pre-wrap;">{text}</div>
-            </div>
+            <div style="margin: {'' if is_user else '35px'} 0 15px 0; padding: 10px; background-color: {bg_color}; border-radius: 8px; border: 1px solid #E0E0E0;">
+                <div style="font-weight: bold; color: {color}; margin-bottom: 10px;">{sender}:</div>
+                <div style="margin-left: 10px; white-space: pre-wrap; margin-top: {'' if is_user else '10px'}">
+                    {text if is_user else chr(10) + text}
+                </div>
         """
+        
+        # Добавляем информацию о производительности для ответов ассистента
+        if not is_user and performance_info:
+            tokens_per_sec = performance_info.get('tokens', 0) / performance_info.get('total_time', 1)
+            message_html += f"""
+                <div style="margin-top: 10px; font-size: 12px; color: #757575;">
+                    ⚡ Время: {performance_info.get('total_time', 0):.2f}с | 
+                    🔄 Токенов: {performance_info.get('tokens', 0)} ({tokens_per_sec:.1f} т/с) | 
+                    ⚙️ Модель: {performance_info.get('model', 'неизвестно')}
+                </div>
+            """
+        
+        message_html += "</div>"
         
         # Добавляем сообщение в конец
         cursor = self.chat_text.textCursor()
@@ -152,6 +174,21 @@ class ChatHistory(QScrollArea):
         self.chat_text.verticalScrollBar().setValue(
             self.chat_text.verticalScrollBar().maximum()
         )
+
+    def add_message_chunk(self, chunk: str):
+        """Добавление части сообщения в чат"""
+        # Добавляем текст в последнее сообщение
+        cursor = self.chat_text.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.insertText(chunk)
+        
+        # Прокручиваем к последнему сообщению
+        self.chat_text.verticalScrollBar().setValue(
+            self.chat_text.verticalScrollBar().maximum()
+        )
+        
+        # Обновляем отображение
+        QApplication.processEvents()
 
     def clear(self):
         """Очистка истории чата"""
@@ -164,50 +201,206 @@ class ModelSettings(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
+        layout.setSpacing(10)
 
+        # Создаем скролл для настроек
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        
+        # Создаем контейнер для настроек
+        container = QWidget()
+        settings_layout = QVBoxLayout(container)
+        settings_layout.setSpacing(10)
+        
         # Заголовок
         header = QLabel("Настройки модели")
         header.setStyleSheet("font-weight: bold; font-size: 14px;")
-        layout.addWidget(header)
+        settings_layout.addWidget(header)
 
+        # Базовые настройки
+        basic_group = QGroupBox("Базовые настройки")
+        basic_layout = QFormLayout()
+        
         # Температура
-        temp_layout = QHBoxLayout()
-        temp_label = QLabel("Температура:")
         self.temp_spin = QDoubleSpinBox()
         self.temp_spin.setRange(0.0, 2.0)
         self.temp_spin.setSingleStep(0.1)
         self.temp_spin.setValue(0.7)
-        temp_layout.addWidget(temp_label)
-        temp_layout.addWidget(self.temp_spin)
-        layout.addLayout(temp_layout)
+        self.temp_spin.setToolTip("Контролирует случайность генерации (0.0 - детерминированная, 2.0 - максимально случайная)")
+        basic_layout.addRow("Температура:", self.temp_spin)
 
         # Максимальное количество токенов
-        tokens_layout = QHBoxLayout()
-        tokens_label = QLabel("Макс. токенов:")
         self.tokens_spin = QSpinBox()
         self.tokens_spin.setRange(1, 4096)
         self.tokens_spin.setValue(2048)
-        tokens_layout.addWidget(tokens_label)
-        tokens_layout.addWidget(self.tokens_spin)
-        layout.addLayout(tokens_layout)
+        self.tokens_spin.setToolTip("Максимальное количество токенов в ответе")
+        basic_layout.addRow("Макс. токенов:", self.tokens_spin)
+        
+        basic_group.setLayout(basic_layout)
+        settings_layout.addWidget(basic_group)
+
+        # Продвинутые настройки
+        advanced_group = QGroupBox("Продвинутые настройки")
+        advanced_layout = QFormLayout()
+        
+        # Top-K
+        self.top_k_spin = QSpinBox()
+        self.top_k_spin.setRange(1, 100)
+        self.top_k_spin.setValue(40)
+        self.top_k_spin.setToolTip("Количество токенов для выборки (больше значение - более разнообразные ответы)")
+        advanced_layout.addRow("Top-K:", self.top_k_spin)
+        
+        # Top-P
+        self.top_p_spin = QDoubleSpinBox()
+        self.top_p_spin.setRange(0.0, 1.0)
+        self.top_p_spin.setSingleStep(0.05)
+        self.top_p_spin.setValue(0.9)
+        self.top_p_spin.setToolTip("Порог вероятности для выборки токенов (меньше значение - более консервативные ответы)")
+        advanced_layout.addRow("Top-P:", self.top_p_spin)
+        
+        # Repeat Penalty
+        self.repeat_penalty_spin = QDoubleSpinBox()
+        self.repeat_penalty_spin.setRange(1.0, 2.0)
+        self.repeat_penalty_spin.setSingleStep(0.1)
+        self.repeat_penalty_spin.setValue(1.1)
+        self.repeat_penalty_spin.setToolTip("Штраф за повторение токенов (больше значение - меньше повторений)")
+        advanced_layout.addRow("Repeat Penalty:", self.repeat_penalty_spin)
+        
+        # Presence Penalty
+        self.presence_penalty_spin = QDoubleSpinBox()
+        self.presence_penalty_spin.setRange(-2.0, 2.0)
+        self.presence_penalty_spin.setSingleStep(0.1)
+        self.presence_penalty_spin.setValue(0.0)
+        self.presence_penalty_spin.setToolTip("Штраф за использование существующих токенов")
+        advanced_layout.addRow("Presence Penalty:", self.presence_penalty_spin)
+        
+        # Frequency Penalty
+        self.frequency_penalty_spin = QDoubleSpinBox()
+        self.frequency_penalty_spin.setRange(-2.0, 2.0)
+        self.frequency_penalty_spin.setSingleStep(0.1)
+        self.frequency_penalty_spin.setValue(0.0)
+        self.frequency_penalty_spin.setToolTip("Штраф за частое использование токенов")
+        advanced_layout.addRow("Frequency Penalty:", self.frequency_penalty_spin)
+        
+        # TFS-Z
+        self.tfs_z_spin = QDoubleSpinBox()
+        self.tfs_z_spin.setRange(0.0, 2.0)
+        self.tfs_z_spin.setSingleStep(0.1)
+        self.tfs_z_spin.setValue(1.0)
+        self.tfs_z_spin.setToolTip("Параметр хвостового свободного сэмплирования")
+        advanced_layout.addRow("TFS-Z:", self.tfs_z_spin)
+        
+        advanced_group.setLayout(advanced_layout)
+        settings_layout.addWidget(advanced_group)
+
+        # Mirostat настройки
+        mirostat_group = QGroupBox("Mirostat настройки")
+        mirostat_layout = QFormLayout()
+        
+        # Mirostat mode
+        self.mirostat_spin = QSpinBox()
+        self.mirostat_spin.setRange(0, 2)
+        self.mirostat_spin.setValue(0)
+        self.mirostat_spin.setToolTip("Режим Mirostat (0 - выкл, 1 - v1, 2 - v2)")
+        mirostat_layout.addRow("Mirostat режим:", self.mirostat_spin)
+        
+        # Mirostat tau
+        self.mirostat_tau_spin = QDoubleSpinBox()
+        self.mirostat_tau_spin.setRange(0.0, 10.0)
+        self.mirostat_tau_spin.setSingleStep(0.1)
+        self.mirostat_tau_spin.setValue(5.0)
+        self.mirostat_tau_spin.setToolTip("Целевая энтропия Mirostat")
+        mirostat_layout.addRow("Mirostat tau:", self.mirostat_tau_spin)
+        
+        # Mirostat eta
+        self.mirostat_eta_spin = QDoubleSpinBox()
+        self.mirostat_eta_spin.setRange(0.0, 1.0)
+        self.mirostat_eta_spin.setSingleStep(0.01)
+        self.mirostat_eta_spin.setValue(0.1)
+        self.mirostat_eta_spin.setToolTip("Скорость обучения Mirostat")
+        mirostat_layout.addRow("Mirostat eta:", self.mirostat_eta_spin)
+        
+        mirostat_group.setLayout(mirostat_layout)
+        settings_layout.addWidget(mirostat_group)
 
         # Системный промпт
-        layout.addWidget(QLabel("Системный промпт:"))
+        system_group = QGroupBox("Системный промпт")
+        system_layout = QVBoxLayout()
         self.system_prompt = QTextEdit()
         self.system_prompt.setPlaceholderText("Введите системный промпт...")
         self.system_prompt.setMaximumHeight(100)
-        layout.addWidget(self.system_prompt)
+        system_layout.addWidget(self.system_prompt)
+        system_group.setLayout(system_layout)
+        settings_layout.addWidget(system_group)
 
-        layout.addStretch()
+        # Добавляем растягивающийся элемент в конец
+        settings_layout.addStretch()
+        
+        # Устанавливаем контейнер в скролл
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
 
         # Стилизация
         self.setStyleSheet("""
-            ModelSettings {
+            QGroupBox {
+                background-color: #FFFFFF;
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 16px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 4px 8px;
                 background-color: #F5F5F5;
-                border-radius: 8px;
-                padding: 10px;
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+            }
+            QSpinBox, QDoubleSpinBox {
+                padding: 4px;
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+            }
+            QSpinBox:hover, QDoubleSpinBox:hover {
+                border-color: #2196F3;
+            }
+            QSpinBox:focus, QDoubleSpinBox:focus {
+                border-color: #2196F3;
+                background-color: #E3F2FD;
+            }
+            QTextEdit {
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+                padding: 4px;
+            }
+            QTextEdit:focus {
+                border-color: #2196F3;
+                background-color: #E3F2FD;
+            }
+            QLabel[tooltip] {
+                color: #757575;
+                font-style: italic;
             }
         """)
+
+    def get_parameters(self) -> dict:
+        """Получение всех параметров модели"""
+        return {
+            'temperature': self.temp_spin.value(),
+            'max_tokens': self.tokens_spin.value(),
+            'top_k': self.top_k_spin.value(),
+            'top_p': self.top_p_spin.value(),
+            'repeat_penalty': self.repeat_penalty_spin.value(),
+            'presence_penalty': self.presence_penalty_spin.value(),
+            'frequency_penalty': self.frequency_penalty_spin.value(),
+            'tfs_z': self.tfs_z_spin.value(),
+            'mirostat': self.mirostat_spin.value(),
+            'mirostat_tau': self.mirostat_tau_spin.value(),
+            'mirostat_eta': self.mirostat_eta_spin.value(),
+            'system': self.system_prompt.toPlainText().strip()
+        }
 
 
 class ModelThread(QThread):
@@ -237,6 +430,68 @@ class ModelThread(QThread):
                     self.operation_complete.emit(False, "Не удалось остановить модель")
         except Exception as e:
             self.operation_complete.emit(False, str(e))
+
+
+class MessageThread(QThread):
+    """Поток для отправки и получения сообщений"""
+    message_chunk = pyqtSignal(str)  # Сигнал для частей ответа
+    finished = pyqtSignal()  # Сигнал о завершении
+    error = pyqtSignal(str)  # Сигнал об ошибке
+    
+    def __init__(self, api, model, prompt, system, **kwargs):
+        super().__init__()
+        self.api = api
+        self.model = model
+        self.prompt = prompt
+        self.system = system
+        self.kwargs = kwargs  # Сохраняем все дополнительные параметры
+        
+    def run(self):
+        try:
+            # Генерируем ответ с обработкой чанков
+            for chunk in self.api.generate_stream(
+                model=self.model,
+                prompt=self.prompt,
+                system=self.system,
+                **self.kwargs  # Передаем все параметры
+            ):
+                if chunk:
+                    self.message_chunk.emit(chunk)
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
+
+    def closeEvent(self, event):
+        """Обработка события закрытия окна"""
+        if not hasattr(self, 'initialization_complete') or not self.initialization_complete:
+            logging.warning("Попытка закрыть окно во время инициализации")
+            event.ignore()
+            return
+        
+        try:
+            # Останавливаем все запущенные модели
+            logging.info("Остановка всех моделей перед закрытием...")
+            self.api.stop_all_models()
+            
+            # Останавливаем таймер обновления
+            if hasattr(self, 'update_timer') and self.update_timer is not None:
+                self.update_timer.stop()
+            
+            # Очищаем потоки
+            if hasattr(self, 'model_thread') and self.model_thread is not None:
+                self.model_thread.quit()
+                self.model_thread.wait()
+                self.model_thread = None
+            
+            if hasattr(self, 'message_thread') and self.message_thread is not None:
+                self.message_thread.quit()
+                self.message_thread.wait()
+                self.message_thread = None
+            
+        except Exception as e:
+            logging.error(f"Ошибка при закрытии приложения: {str(e)}")
+        
+        event.accept()
 
 
 class ChatWindow(QMainWindow):
@@ -315,6 +570,27 @@ class ChatWindow(QMainWindow):
             event.ignore()
             return
         
+        try:
+            # Останавливаем все запущенные модели
+            logging.info("Остановка всех моделей перед закрытием...")
+            self.api.stop_all_models()
+            
+            # Останавливаем таймер обновления
+            if hasattr(self, 'update_timer'):
+                self.update_timer.stop()
+            
+            # Очищаем потоки
+            if hasattr(self, 'model_thread'):
+                self.model_thread.quit()
+                self.model_thread.wait()
+            
+            if hasattr(self, 'message_thread'):
+                self.message_thread.quit()
+                self.message_thread.wait()
+            
+        except Exception as e:
+            logging.error(f"Ошибка при закрытии приложения: {str(e)}")
+        
         event.accept()
     
     def _initialize_interface(self, main_layout):
@@ -353,15 +629,79 @@ class ChatWindow(QMainWindow):
             model_controls = QHBoxLayout()
             self.start_model_btn = QPushButton("▶ Запустить")
             self.start_model_btn.clicked.connect(self.start_model)
-            self.start_model_btn.setEnabled(False)  # Изначально кнопка неактивна
+            self.start_model_btn.setEnabled(False)
+            self.start_model_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                }
+                QPushButton:hover { background-color: #45a049; }
+                QPushButton:pressed { background-color: #3d8b40; }
+                QPushButton:disabled { background-color: #BDBDBD; }
+            """)
             model_controls.addWidget(self.start_model_btn)
             
             self.stop_model_btn = QPushButton("⏹ Остановить")
             self.stop_model_btn.clicked.connect(self.stop_model)
             self.stop_model_btn.setEnabled(False)
+            self.stop_model_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f44336;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                }
+                QPushButton:hover { background-color: #da190b; }
+                QPushButton:pressed { background-color: #d32f2f; }
+                QPushButton:disabled { background-color: #BDBDBD; }
+            """)
             model_controls.addWidget(self.stop_model_btn)
             
             left_layout.addLayout(model_controls)
+            
+            # Кнопки настроек
+            settings_layout = QHBoxLayout()
+            
+            # Кнопка настроек модели
+            model_settings_btn = QPushButton("⚙ Модель")
+            model_settings_btn.clicked.connect(self._toggle_model_settings)
+            model_settings_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2196F3;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                    margin-top: 10px;
+                }
+                QPushButton:hover { background-color: #1976D2; }
+                QPushButton:pressed { background-color: #1565C0; }
+            """)
+            settings_layout.addWidget(model_settings_btn)
+            
+            # Кнопка настроек Ollama
+            ollama_settings_btn = QPushButton("⚙ Ollama")
+            ollama_settings_btn.clicked.connect(self._show_ollama_settings)
+            ollama_settings_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #673AB7;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                    margin-top: 10px;
+                }
+                QPushButton:hover { background-color: #5E35B1; }
+                QPushButton:pressed { background-color: #512DA8; }
+            """)
+            settings_layout.addWidget(ollama_settings_btn)
+            
+            left_layout.addLayout(settings_layout)
+            
             left_layout.addStretch()
             
             left_panel.setMinimumWidth(200)
@@ -398,8 +738,13 @@ class ChatWindow(QMainWindow):
                 }
             """)
             
+            # Добавляем обработку клавиши Enter
+            self.message_input.installEventFilter(self)
+            
             send_button = QPushButton("Отправить")
+            send_button.setObjectName("send_button")  # Добавляем имя для поиска
             send_button.setMinimumWidth(100)
+            send_button.setEnabled(False)  # Изначально кнопка неактивна
             send_button.setStyleSheet("""
                 QPushButton {
                     background-color: #2962FF;
@@ -438,9 +783,6 @@ class ChatWindow(QMainWindow):
             splitter.setStretchFactor(1, 1)  # Центральная панель - растягивается
             splitter.setStretchFactor(2, 0)  # Правая панель - фиксированная
             
-            # Создаем меню
-            self.create_menu()
-            
             # Подключаем сигналы
             self.model_combo.currentTextChanged.connect(self.on_model_changed)
             
@@ -456,37 +798,6 @@ class ChatWindow(QMainWindow):
             logging.error(f"Ошибка создания интерфейса: {str(ui_error)}")
             raise
             
-    def create_menu(self):
-        """Создание главного меню"""
-        menubar = self.menuBar()
-
-        # Меню Файл
-        file_menu = menubar.addMenu("Файл")
-
-        new_chat = QAction("Новый чат", self)
-        new_chat.setShortcut("Ctrl+N")
-        new_chat.triggered.connect(self.new_chat)
-        file_menu.addAction(new_chat)
-
-        settings = QAction("Настройки", self)
-        settings.setShortcut("Ctrl+,")
-        settings.triggered.connect(self.show_settings)
-        file_menu.addAction(settings)
-
-        file_menu.addSeparator()
-
-        exit_action = QAction("Выход", self)
-        exit_action.setShortcut("Ctrl+Q")
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        # Меню Правка
-        edit_menu = menubar.addMenu("Правка")
-
-        clear_chat = QAction("Очистить чат", self)
-        clear_chat.triggered.connect(self.clear_chat)
-        edit_menu.addAction(clear_chat)
-
     def update_models(self):
         """Обновление списка моделей"""
         if not hasattr(self, 'initialization_complete') or not self.initialization_complete:
@@ -595,37 +906,75 @@ class ChatWindow(QMainWindow):
         self.model_status.setText(f"Статус: {status}")
         self.model_status.setStyleSheet(f"color: {color}; margin-top: 5px;")
 
+    def _update_buttons_state(self, is_running: bool):
+        """Обновление состояния кнопок в зависимости от состояния модели"""
+        if is_running:
+            # Модель запущена
+            self.start_model_btn.setEnabled(False)
+            self.stop_model_btn.setEnabled(True)
+            self.model_combo.setEnabled(True)  # Разрешаем смену модели на лету
+            # Активируем кнопку отправки
+            send_button = self.findChild(QPushButton, "send_button")
+            if send_button:
+                send_button.setEnabled(True)
+        else:
+            # Модель остановлена
+            self.start_model_btn.setEnabled(True)
+            self.stop_model_btn.setEnabled(False)
+            self.model_combo.setEnabled(True)
+            # Деактивируем кнопку отправки
+            send_button = self.findChild(QPushButton, "send_button")
+            if send_button:
+                send_button.setEnabled(False)
+
     def check_model_availability(self):
         """Проверка доступности модели"""
         if not self.current_model:
+            # Деактивируем кнопку отправки
+            send_button = self.findChild(QPushButton, "send_button")
+            if send_button:
+                send_button.setEnabled(False)
+                QApplication.processEvents()
             return False
 
         try:
-            self.chat_history.add_message("🔄 Проверка модели...", False)
-
-            # Пробуем отправить тестовый запрос
-            response = self.api.generate(
-                model=self.current_model,
-                prompt="test",
-                system="You are a helpful AI assistant. Please respond with 'OK' to confirm you are working.",
-                temperature=0.7,
-                max_tokens=10
-            )
-
-            # Проверяем ответ
-            if response and response.strip():
-                self.chat_history.add_message(f"✅ Тестовый запрос успешен. Ответ: {response}",
-                                              False)
+            # Проверяем, запущена ли уже модель
+            is_running = self.api.is_model_running(self.current_model)
+            
+            if is_running:
+                self.chat_history.add_message(f"✅ Модель {self.current_model} активна", False)
+                self.update_model_status(f"Модель активна: {self.current_model}")
+                # Активируем кнопку отправки
+                send_button = self.findChild(QPushButton, "send_button")
+                if send_button:
+                    send_button.setEnabled(True)
+                    QApplication.processEvents()
+                self._update_buttons_state(True)  # Модель запущена
                 return True
             else:
-                self.chat_history.add_message("❌ Модель не вернула ответ", False)
-                self.update_model_status("Ошибка: нет ответа", True)
-                return False
+                # Пробуем запустить модель автоматически
+                success = self.api.run_model(self.current_model)
+                if success:
+                    self.chat_history.add_message(f"✅ Модель {self.current_model} запущена автоматически", False)
+                    self.update_model_status(f"Модель активна: {self.current_model}")
+                    # Активируем кнопку отправки
+                    send_button = self.findChild(QPushButton, "send_button")
+                    if send_button:
+                        send_button.setEnabled(True)
+                        QApplication.processEvents()
+                    self._update_buttons_state(True)  # Модель запущена
+                    return True
+                else:
+                    self.chat_history.add_message(f"❌ Не удалось запустить модель {self.current_model}", False)
+                    self.update_model_status(f"Ошибка запуска модели", True)
+                    self._update_buttons_state(False)  # Модель не запущена
+                    return False
 
         except Exception as e:
             error_msg = str(e)
             self.chat_history.add_message(f"❌ Ошибка при проверке модели: {error_msg}", False)
             self.update_model_status(f"Ошибка: {error_msg[:50]}...", True)
+            self._update_buttons_state(False)  # Модель не запущена
             return False
 
     def on_model_changed(self, model_text: str):
@@ -635,8 +984,7 @@ class ChatWindow(QMainWindow):
                 self.current_model = None
                 self.update_model_status("Не выбрана", True)
                 self.chat_history.add_message("⚠️ Модель не выбрана", False)
-                self.start_model_btn.setEnabled(False)
-                self.stop_model_btn.setEnabled(False)
+                self._update_buttons_state(False)
                 return
 
             try:
@@ -648,21 +996,19 @@ class ChatWindow(QMainWindow):
                 logging.error(f"Ошибка при получении имени модели: {str(e)}")
                 self.current_model = None
                 self.update_model_status("Ошибка выбора модели", True)
+                self._update_buttons_state(False)
                 return
 
-            self.chat_history.add_message(f"🔄 Загрузка модели: {self.current_model}", False)
+            self.chat_history.add_message(f"🔄 Проверка модели: {self.current_model}", False)
             self.update_model_status("Проверка модели...")
             
-            # Отключаем элементы управления на время проверки
-            self.model_combo.setEnabled(False)
+            # Временно отключаем кнопки во время проверки
             self.start_model_btn.setEnabled(False)
             self.stop_model_btn.setEnabled(False)
             
             if self.check_model_availability():
-                self.update_model_status(f"Готова к работе: {self.current_model}")
-                self.chat_history.add_message(
-                    f"✅ Модель {self.current_model} успешно загружена и готова к работе", False)
-                self.start_model_btn.setEnabled(True)
+                # Состояние кнопок уже обновлено в check_model_availability
+                pass
             else:
                 self.chat_history.add_message(
                     "⚠️ Рекомендации:\n"
@@ -672,12 +1018,12 @@ class ChatWindow(QMainWindow):
                     "4. Проверьте журнал Ollama на наличие ошибок",
                     False
                 )
-                self.start_model_btn.setEnabled(True)
+                self._update_buttons_state(False)
+                
         except Exception as e:
             logging.error(f"Ошибка при смене модели: {str(e)}")
             self.update_model_status("Ошибка смены модели", True)
-        finally:
-            self.model_combo.setEnabled(True)
+            self._update_buttons_state(False)
 
     def send_message(self):
         """Отправка сообщения"""
@@ -692,6 +1038,12 @@ class ChatWindow(QMainWindow):
 
         logging.info(f"Отправка сообщения модели {self.current_model}")
 
+        # Блокируем кнопку отправки и поле ввода
+        self.message_input.setReadOnly(True)
+        send_button = self.findChild(QPushButton, "send_button")
+        if send_button:
+            send_button.setEnabled(False)
+
         # Добавляем сообщение пользователя
         self.chat_history.add_message(text, True)
         self.message_input.clear()
@@ -700,78 +1052,84 @@ class ChatWindow(QMainWindow):
         self.update_model_status(f"Генерация ответа...")
 
         try:
-            # Получаем настройки
-            temperature = self.model_settings.temp_spin.value()
-            max_tokens = self.model_settings.tokens_spin.value()
-            system_prompt = self.model_settings.system_prompt.toPlainText().strip()
-
-            logging.info(
-                f"Настройки запроса: temp={temperature}, max_tokens={max_tokens}, system_prompt={system_prompt}")
-
-            # Логируем настройки в чат
-            self.chat_history.add_message(
-                f"*Настройки запроса:*\n"
-                f"- Модель: {self.current_model}\n"
-                f"- Температура: {temperature}\n"
-                f"- Макс. токенов: {max_tokens}\n"
-                f"- Системный промпт: {system_prompt if system_prompt else 'не задан'}",
-                False
+            # Получаем все параметры модели
+            params = self.model_settings.get_parameters()
+            
+            # Сохраняем время начала генерации
+            self.generation_start_time = time.time()
+            self.total_tokens = 0
+            
+            # Создаем и запускаем поток для обработки сообщения
+            self.message_thread = MessageThread(
+                self.api, 
+                self.current_model,
+                text,
+                params.pop('system'),  # Извлекаем системный промпт
+                **params  # Передаем все остальные параметры
             )
-
-            # Генерируем ответ
-            logging.info("Отправка запроса к API...")
-            response = self.api.generate(
-                model=self.current_model,
-                prompt=text,
-                system=system_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-            logging.info("Ответ получен")
-
-            # Обновляем статус
-            self.update_model_status(f"Готова к работе: {self.current_model}")
-
-            # Добавляем ответ в чат
-            self.chat_history.add_message(response, False)
+            
+            # Подключаем сигналы
+            self.message_thread.message_chunk.connect(self.on_message_chunk)
+            self.message_thread.finished.connect(self.on_message_complete)
+            self.message_thread.error.connect(self.on_message_error)
+            
+            # Запускаем поток
+            self.message_thread.start()
 
         except Exception as e:
-            error_msg = str(e)
-            logging.error(f"Ошибка генерации ответа: {error_msg}")
-            self.update_model_status(f"Ошибка генерации", True)
-            self.chat_history.add_message(f"❌ Ошибка: {error_msg}", False)
+            self.on_message_error(str(e))
 
-            # Проверяем доступность модели после ошибки
-            if not self.check_model_availability():
-                self.chat_history.add_message(
-                    "⚠️ Модель недоступна. Попробуйте:\n"
-                    "1. Проверить статус Ollama\n"
-                    "2. Перезапустить модель\n"
-                    "3. Переустановить модель",
-                    False
-                )
+    def on_message_chunk(self, chunk: str):
+        """Обработка части ответа от модели"""
+        self.chat_history.add_message_chunk(chunk)
+        self.total_tokens += 1  # Увеличиваем счетчик токенов
 
-    def new_chat(self):
-        """Создание нового чата"""
-        pass
+    def on_message_complete(self):
+        """Обработка завершения генерации ответа"""
+        # Собираем информацию о производительности
+        total_time = time.time() - self.generation_start_time
+        performance_info = {
+            'total_time': total_time,
+            'tokens': self.total_tokens,
+            'model': self.current_model
+        }
+        
+        # Добавляем пустую строку и информацию о производительности
+        self.chat_history.add_message("", False, performance_info)
+        
+        # Разблокируем интерфейс
+        self.message_input.setReadOnly(False)
+        send_button = self.findChild(QPushButton, "send_button")
+        if send_button:
+            send_button.setEnabled(True)
+        self.update_model_status(f"Готова к работе: {self.current_model}")
+        
+        # Отключаем поток
+        if hasattr(self, 'message_thread'):
+            self.message_thread.deleteLater()
+            self.message_thread = None
 
-    def show_settings(self):
-        """Показать окно настроек"""
-        self.settings_requested.emit()
+    def on_message_error(self, error_msg: str):
+        """Обработка ошибки при генерации ответа"""
+        logging.error(f"Ошибка генерации ответа: {error_msg}")
+        self.update_model_status(f"Ошибка генерации", True)
+        self.chat_history.add_message(f"❌ Ошибка: {error_msg}", False)
+        
+        # Разблокируем интерфейс
+        self.message_input.setReadOnly(False)
+        send_button = self.findChild(QPushButton, "send_button")
+        if send_button:
+            send_button.setEnabled(True)
 
-    def clear_chat(self):
-        """Очистка истории чата"""
-        reply = QMessageBox.question(
-            self,
-            "Подтверждение",
-            "Вы уверены, что хотите очистить историю чата?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            # Очищаем историю чата
-            self.chat_history.clear()
+        # Проверяем доступность модели после ошибки
+        if not self.check_model_availability():
+            self.chat_history.add_message(
+                "⚠️ Модель недоступна. Попробуйте:\n"
+                "1. Проверить статус Ollama\n"
+                "2. Перезапустить модель\n"
+                "3. Переустановить модель",
+                False
+            )
 
     def start_model(self):
         """Запуск модели"""
@@ -865,6 +1223,7 @@ class ChatWindow(QMainWindow):
 
         # Защита от повторной остановки
         self.stop_model_btn.setEnabled(False)
+        self.start_model_btn.setEnabled(False)
 
         try:
             logging.info(f"Остановка модели: {self.current_model}")
@@ -876,6 +1235,10 @@ class ChatWindow(QMainWindow):
             self.model_thread.operation_complete.connect(self.on_model_operation_complete)
             self.model_thread.start()
 
+            # Обновляем состояние API
+            if self.current_model in self.api.running_models:
+                self.api.running_models.remove(self.current_model)
+
         except Exception as e:
             error_msg = str(e)
             logging.error(f"Ошибка остановки модели: {error_msg}")
@@ -883,3 +1246,46 @@ class ChatWindow(QMainWindow):
             self.chat_history.add_message(f"❌ Ошибка остановки модели: {error_msg}", False)
             self.stop_model_btn.setEnabled(True)
             self.model_combo.setEnabled(False)
+
+    def _toggle_model_settings(self):
+        """Показать/скрыть панель настроек модели"""
+        if self.model_settings.isVisible():
+            self.model_settings.hide()
+        else:
+            self.model_settings.show()
+
+    def _show_ollama_settings(self):
+        """Открыть окно настроек Ollama"""
+        try:
+            settings_dialog = OllamaSettings(self)
+            settings_dialog.show()  # Используем show() вместо exec()
+        except Exception as e:
+            logging.error(f"Ошибка при открытии настроек Ollama: {str(e)}")
+            QMessageBox.warning(self, "Ошибка", f"Не удалось открыть настройки: {str(e)}")
+
+    def clear_chat(self):
+        """Очистка истории чата"""
+        reply = QMessageBox.question(
+            self,
+            "Подтверждение",
+            "Вы уверены, что хотите очистить историю чата?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            # Очищаем историю чата
+            self.chat_history.clear()
+
+    def eventFilter(self, obj, event):
+        """Обработка событий для поля ввода"""
+        if obj is self.message_input and event.type() == event.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+                if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+                    # Shift+Enter - новая строка
+                    return False
+                else:
+                    # Enter - отправка сообщения
+                    self.send_message()
+                    return True
+        return super().eventFilter(obj, event)

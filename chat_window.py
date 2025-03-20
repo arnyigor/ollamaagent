@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QGroupBox, QFormLayout
 )
 
+from lmstudio_settings import LmStudioSettings
 from ollama_api import OllamaAPI
 from ollama_settings import OllamaSettings
 
@@ -19,60 +20,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     stream=sys.stdout
 )
-
-
-class MessageWidget(QFrame):
-    """Виджет для отображения одного сообщения в чате"""
-
-    def __init__(self, text: str, is_user: bool = False, parent=None):
-        super().__init__(parent)
-        self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(5)
-
-        # Заголовок сообщения (User/Assistant)
-        # header = QLabel("Вы" if is_user else "Ассистент")
-        # header.setStyleSheet(
-        #     "font-weight: bold; color: #2962FF;" if is_user else "font-weight: bold; color: #00838F;")
-        # layout.addWidget(header)
-
-        # Текст сообщения в QTextEdit
-        message = QTextEdit()
-        message.setReadOnly(True)
-        message.setPlainText(text)
-        message.setFrameStyle(QFrame.Shape.NoFrame)
-        message.setStyleSheet("""
-            QTextEdit {
-                background-color: #FFFFFF;
-                border: none;
-                padding: 8px;
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 14px;
-                line-height: 1.4;
-                selection-background-color: #E3F2FD;
-            }
-        """)
-
-        # Автоматическая высота
-        doc_height = message.document().size().height()
-        message.setFixedHeight(int(min(doc_height + 20, 400)))
-        message.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        layout.addWidget(message)
-
-        # Стилизация фрейма
-        self.setStyleSheet("""
-            MessageWidget {
-                background-color: #FFFFFF;
-                border: 1px solid #E0E0E0;
-                border-radius: 8px;
-                margin: 5px;
-            }
-            MessageWidget:hover {
-                border-color: #BDBDBD;
-                background-color: #FAFAFA;
-            }
-        """)
 
 
 class ChatHistory(QTextEdit):
@@ -523,6 +470,7 @@ class ChatWindow(QMainWindow):
     settings_requested = pyqtSignal()
 
     def __init__(self):
+        self.logger = logging.getLogger('OllamaAPI')
         self.message_thread = None
         self.total_tokens = None
         self.generation_start_time = None
@@ -730,6 +678,18 @@ class ChatWindow(QMainWindow):
 
             left_layout.addLayout(settings_layout)
 
+            # Добавляем группу для кнопки настроек LmStudio
+            lmstudio_group = QGroupBox("Настройки LmStudio")
+            lmstudio_layout = QVBoxLayout()
+
+            self.lmstudio_btn = QPushButton("🔧 Настройки LmStudio")
+            self.lmstudio_btn.setToolTip("Открыть настройки LmStudio для текущей модели")
+            self.lmstudio_btn.clicked.connect(self.show_lmstudio_settings)
+
+            lmstudio_layout.addWidget(self.lmstudio_btn)
+            lmstudio_group.setLayout(lmstudio_layout)
+            settings_layout.addWidget(lmstudio_group)  # Добавляем группу в layout
+
             left_layout.addStretch()
 
             left_panel.setMinimumWidth(200)
@@ -930,6 +890,15 @@ class ChatWindow(QMainWindow):
             self.update_model_status("Ошибка обновления", True)
             self.current_model = None
             self.start_model_btn.setEnabled(False)
+
+    def show_lmstudio_settings(self):
+        """Показывает окно настроек LMStudio"""
+        try:
+            settings_dialog = LmStudioSettings(self)
+            settings_dialog.show()
+        except Exception as e:
+            self.logger.error(f"Ошибка при открытии", str(e), exc_info=True)
+            logging.error(f"Ошибка при открытии")
 
     def update_model_status(self, status: str, is_error: bool = False):
         """Обновление статуса модели"""

@@ -1,4 +1,3 @@
-import os
 import logging
 import os
 import subprocess
@@ -9,7 +8,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QVBoxLayout, QMessageBox, QComboBox, QFileDialog, QLabel, QDialog,
     QFormLayout, QLineEdit,
-    QHBoxLayout, QProgressBar
+    QHBoxLayout
 )
 
 
@@ -404,7 +403,8 @@ class OllamaSettings(QDialog):
             self.log(f"Найдена системная переменная OLLAMA_MODELS: {self.install_dir}")
         else:
             self.install_dir = os.path.expanduser("~/.ollama")
-            self.log(f"Системная переменная OLLAMA_MODELS не найдена, используется путь по умолчанию: {self.install_dir}")
+            self.log(
+                f"Системная переменная OLLAMA_MODELS не найдена, используется путь по умолчанию: {self.install_dir}")
 
         self.selected_dir_label.setText(f"Папка: {self.install_dir}")
 

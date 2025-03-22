@@ -1,4 +1,1 @@
 PyQt6>=6.4.0 
-requests~=2.32.3
-psutil~=7.0.0
-lmstudio~=1.1.0

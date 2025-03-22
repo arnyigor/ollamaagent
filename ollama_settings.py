@@ -1,14 +1,16 @@
+import os
 import logging
 import os
 import subprocess
 import sys
 import webbrowser
+import time
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QVBoxLayout, QMessageBox, QComboBox, QFileDialog, QLabel, QDialog,
     QFormLayout, QLineEdit,
-    QHBoxLayout
+    QHBoxLayout, QProgressBar
 )
 
 
@@ -273,18 +275,6 @@ class OllamaSettings(QDialog):
         header.setStyleSheet("font-weight: bold; font-size: 14px;")
         install_group.addWidget(header)
 
-        # Рекомендуемые модели
-        recommended_label = QLabel("Рекомендуемые модели:")
-        install_group.addWidget(recommended_label)
-        self.recommended_combo = QComboBox()
-        self.recommended_combo.addItems([
-            "phi3:3.8b (Intel CPU-оптимизированная)",
-            "codegemma:2b (Код-генерация)",
-            "qwen2.5-coder:3b (Код-ревью)"
-        ])
-        self.recommended_combo.currentTextChanged.connect(self.update_model_input)
-        install_group.addWidget(self.recommended_combo)
-
         # Поле ввода и кнопки
         input_layout = QHBoxLayout()
 
@@ -371,15 +361,55 @@ class OllamaSettings(QDialog):
         self.list_model_btn = QPushButton("Обновить список")
         self.delete_model_btn = QPushButton("Удалить")
         self.show_details_btn = QPushButton("Детали")
+        self.run_model_btn = QPushButton("Запустить")
+        self.run_model_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+            QPushButton:pressed {
+                background-color: #EF6C00;
+            }
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+            }
+        """)
         buttons_layout.addWidget(self.list_model_btn)
         buttons_layout.addWidget(self.delete_model_btn)
         buttons_layout.addWidget(self.show_details_btn)
+        buttons_layout.addWidget(self.run_model_btn)
         layout.addLayout(buttons_layout)
+
+        # Добавляем раздел для запущенных моделей
+        layout.addWidget(QLabel("Запущенные модели:"))
+        self.running_combo = QComboBox()
+        self.running_combo.setEditable(False)
+        layout.addWidget(self.running_combo)
+
+        running_buttons_layout = QHBoxLayout()
+        self.refresh_running_btn = QPushButton("Обновить")
+        self.stop_model_btn = QPushButton("Остановить")
+        running_buttons_layout.addWidget(self.refresh_running_btn)
+        running_buttons_layout.addWidget(self.stop_model_btn)
+        layout.addLayout(running_buttons_layout)
 
         # Лог
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
         layout.addWidget(self.status_text)
+
+        # Добавляем прогресс-бар
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setMaximum(0)  # Бесконечный прогресс
+        self.progress_bar.hide()
+        layout.addWidget(self.progress_bar)
 
         # Инициализация остальных переменных
         self.install_dir = os.path.expanduser("~/.ollama")
@@ -395,6 +425,16 @@ class OllamaSettings(QDialog):
         self.delete_model_btn.clicked.connect(self.delete_model)
         self.select_dir_btn.clicked.connect(self.select_install_dir)
         self.show_details_btn.clicked.connect(self.show_model_details)
+        self.refresh_running_btn.clicked.connect(self.update_running_models)
+        self.stop_model_btn.clicked.connect(self.stop_selected_model)
+        self.run_model_btn.clicked.connect(self.run_selected_model)
+
+        # Подключаем сигналы изменения выбора в комбобоксах
+        self.model_combo.currentIndexChanged.connect(self.update_buttons_state)
+        self.running_combo.currentIndexChanged.connect(self.update_buttons_state)
+        
+        # Инициализируем состояние кнопок
+        self.update_buttons_state()
 
         # Читаем системную переменную OLLAMA_MODELS
         models_dir = self.get_system_env_variable("OLLAMA_MODELS")
@@ -403,10 +443,12 @@ class OllamaSettings(QDialog):
             self.log(f"Найдена системная переменная OLLAMA_MODELS: {self.install_dir}")
         else:
             self.install_dir = os.path.expanduser("~/.ollama")
-            self.log(
-                f"Системная переменная OLLAMA_MODELS не найдена, используется путь по умолчанию: {self.install_dir}")
+            self.log(f"Системная переменная OLLAMA_MODELS не найдена, используется путь по умолчанию: {self.install_dir}")
 
         self.selected_dir_label.setText(f"Папка: {self.install_dir}")
+        
+        # Обновляем список запущенных моделей при запуске
+        self.update_running_models()
 
     def log(self, message: str):
         from datetime import datetime
@@ -430,16 +472,40 @@ class OllamaSettings(QDialog):
             self.log("Данные о модели не найдены. Обновите список моделей")
             return
 
+        # Получаем дополнительную информацию о модели через ollama show
+        try:
+            result = subprocess.run(
+                ["ollama", "show", model_name],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            additional_info = result.stdout.strip() if result.returncode == 0 else "Информация недоступна"
+        except Exception as e:
+            additional_info = f"Ошибка получения информации: {str(e)}"
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Детали модели")
+        dialog.setMinimumWidth(500)
         layout = QFormLayout()
+        
+        # Основная информация
         layout.addRow("Имя модели:", QLabel(model_info['name']))
         layout.addRow("Размер:", QLabel(model_info['size']))
         layout.addRow("Полный путь:", QLabel(model_info['path']))
+        
+        # Дополнительная информация
+        info_text = QTextEdit()
+        info_text.setReadOnly(True)
+        info_text.setPlainText(additional_info)
+        info_text.setMinimumHeight(200)
+        layout.addRow("Дополнительная информация:", info_text)
+        
         dialog.setLayout(layout)
         dialog.exec()
 
     def update_model_list(self):
+        previous_model = self.model_combo.currentText().split(" (")[0] if self.model_combo.currentText() else ""
         self.models_info = []
         self.model_combo.clear()
         try:
@@ -470,9 +536,19 @@ class OllamaSettings(QDialog):
                 })
                 self.model_combo.addItem(f"{name} ({size})")
 
+            # Восстанавливаем выбранную модель, если она все еще существует
+            if previous_model:
+                for i in range(self.model_combo.count()):
+                    if previous_model in self.model_combo.itemText(i):
+                        self.model_combo.setCurrentIndex(i)
+                        break
+
             self.log(f"Найдено моделей: {len(self.models_info)}")
         except Exception as e:
             self.log(f"Ошибка получения списка: {str(e)}")
+        
+        # Обновляем состояние кнопок
+        self.update_buttons_state()
 
     def update_selected_model(self, index):
         selected_text = self.model_combo.itemText(index)
@@ -553,10 +629,6 @@ class OllamaSettings(QDialog):
             self.log(f"Неожиданная ошибка: {str(e)}")
             import traceback
             self.log(traceback.format_exc())
-
-    def update_model_input(self, combo_text):
-        model_name = combo_text.split(" (")[0]
-        self.model_input.setText(model_name)
 
     def start_install(self):
         model_name = self.model_input.text().strip() or \
@@ -680,3 +752,321 @@ class OllamaSettings(QDialog):
         # Блокируем кнопку установки и активируем кнопку отмены
         self.install_button.setEnabled(False)
         self.cancel_btn.setEnabled(True)
+
+    def update_buttons_state(self):
+        """Обновление состояния кнопок интерфейса"""
+        # Проверяем наличие выбранной модели в списке установленных
+        has_selected_model = self.model_combo.currentText() != ""
+        # Проверяем наличие запущенной модели
+        has_running_model = self.running_combo.currentText() != ""
+        
+        # Обновляем состояние кнопок для установленных моделей
+        self.delete_model_btn.setEnabled(has_selected_model)
+        self.show_details_btn.setEnabled(has_selected_model)
+        
+        # Кнопка запуска активна только если:
+        # 1. Есть выбранная модель
+        # 2. Нет запущенных моделей
+        self.run_model_btn.setEnabled(has_selected_model and not has_running_model)
+        
+        # Кнопка остановки активна только если есть запущенная модель
+        self.stop_model_btn.setEnabled(has_running_model)
+        
+        # Кнопки обновления всегда активны
+        self.refresh_running_btn.setEnabled(True)
+        self.list_model_btn.setEnabled(True)
+
+    def update_running_models(self):
+        """Обновление списка запущенных моделей"""
+        previous_model = self.running_combo.currentText()
+        self.running_combo.clear()
+        try:
+            result = subprocess.run(
+                ["ollama", "ps"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                lines = result.stdout.strip().split('\n')[1:]  # Пропускаем заголовок
+                for line in lines:
+                    parts = line.strip().split()
+                    if parts:
+                        model_name = parts[0]
+                        self.running_combo.addItem(model_name)
+                self.log(f"Найдено запущенных моделей: {len(lines)}")
+            else:
+                self.log("Нет запущенных моделей")
+        except Exception as e:
+            self.log(f"Ошибка получения списка запущенных моделей: {str(e)}")
+        
+        # Восстанавливаем выбранную модель, если она все еще запущена
+        index = self.running_combo.findText(previous_model)
+        if index >= 0:
+            self.running_combo.setCurrentIndex(index)
+        
+        # Обновляем состояние кнопок
+        self.update_buttons_state()
+
+    def stop_selected_model(self):
+        """Остановка выбранной модели"""
+        model_name = self.running_combo.currentText()
+        if not model_name:
+            self.log("Модель не выбрана")
+            return
+
+        try:
+            # Показываем, что идет процесс остановки
+            self.stop_model_btn.setEnabled(False)
+            self.run_model_btn.setEnabled(False)  # Блокируем также кнопку запуска
+            self.progress_bar.setMaximum(0)  # Бесконечный прогресс
+            self.progress_bar.show()
+            self.log(f"Останавливаем модель {model_name}...")
+
+            result = subprocess.run(
+                ["ollama", "stop", model_name],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                self.log(f"Модель {model_name} остановлена")
+                # Даем время на остановку и проверяем статус
+                time.sleep(1)  # Ждем секунду
+                # Проверяем, действительно ли модель остановлена
+                check_result = subprocess.run(
+                    ["ollama", "ps"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if model_name not in check_result.stdout:
+                    # Модель действительно остановлена, очищаем список запущенных
+                    self.running_combo.clear()
+                else:
+                    # Если модель все еще в списке, пробуем остановить еще раз
+                    self.log("Повторная попытка остановки...")
+                    subprocess.run(
+                        ["ollama", "stop", model_name],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    time.sleep(1)  # Ждем еще секунду
+            else:
+                self.log(f"Ошибка остановки модели: {result.stderr}")
+
+        except Exception as e:
+            self.log(f"Ошибка при остановке модели: {str(e)}")
+        finally:
+            # Обновляем состояние интерфейса
+            self.progress_bar.hide()
+            self.progress_bar.setMaximum(100)
+            self.progress_bar.setValue(0)
+            
+            # Сначала обновляем списки моделей
+            self.update_running_models()
+            self.update_model_list()
+            
+            # Затем принудительно обновляем состояние кнопок
+            self.update_buttons_state()
+
+    def run_selected_model(self):
+        """Запуск выбранной модели"""
+        model_name = self.model_combo.currentText()
+        if not model_name:
+            self.log("Модель не выбрана")
+            return
+
+        model_name = model_name.split(" (")[0]  # Получаем только имя модели без размера
+        
+        # Блокируем кнопку запуска и показываем прогресс
+        self.run_model_btn.setEnabled(False)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.show()
+        
+        # Создаем и запускаем поток
+        self.run_worker = RunModelWorker(model_name)
+        self.run_worker.log_signal.connect(self.log)
+        self.run_worker.progress_signal.connect(self.update_progress)
+        self.run_worker.finish_signal.connect(self.run_finished)
+        self.run_worker.start()
+
+    def update_progress(self, value):
+        """Обновление прогресс-бара"""
+        self.progress_bar.setValue(value)
+        self.progress_bar.setFormat(f"{value}%")
+
+    def run_finished(self, success):
+        """Обработка завершения запуска модели"""
+        # Скрываем прогресс
+        self.progress_bar.hide()
+        
+        # Обновляем списки моделей и состояние кнопок
+        self.update_running_models()
+        self.update_model_list()
+        
+        if success:
+            self.log("Модель успешно запущена и готова к использованию")
+        else:
+            self.log("Не удалось запустить модель")
+
+
+class RunModelWorker(QThread):
+    """Поток для запуска модели"""
+    log_signal = pyqtSignal(str)
+    progress_signal = pyqtSignal(int)
+    finish_signal = pyqtSignal(bool)
+
+    def __init__(self, model_name):
+        super().__init__()
+        self.model_name = model_name
+        self.server_process = None
+        self.is_cancelled = False
+
+    def check_server(self) -> bool:
+        """Проверка работы сервера"""
+        try:
+            import requests
+            response = requests.get("http://localhost:11434/api/tags")
+            return response.status_code == 200
+        except:
+            return False
+
+    def wait_for_server(self, timeout=30):
+        """Ожидание запуска сервера"""
+        import time
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if self.check_server():
+                return True
+            time.sleep(1)
+        return False
+
+    def check_model_loaded(self) -> bool:
+        """Проверка загрузки модели"""
+        try:
+            import requests
+            # Отправляем тестовый запрос к модели
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": self.model_name,
+                    "prompt": "test",
+                    "raw": True,
+                    "stream": False
+                },
+                timeout=5
+            )
+            return response.status_code == 200
+        except:
+            return False
+
+    def run(self):
+        try:
+            self.log_signal.emit(f"Запуск модели {self.model_name}...")
+            
+            # Проверяем сервер
+            if not self.check_server():
+                self.log_signal.emit("Запуск сервера Ollama...")
+                if sys.platform == "win32":
+                    self.server_process = subprocess.Popen(
+                        ["start", "/B", "ollama", "serve"],
+                        shell=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        encoding='utf-8'
+                    )
+                else:
+                    self.server_process = subprocess.Popen(
+                        ["ollama", "serve"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        encoding='utf-8'
+                    )
+                
+                # Ждем запуска сервера
+                if not self.wait_for_server():
+                    self.log_signal.emit("Ошибка: Сервер не запустился")
+                    self.finish_signal.emit(False)
+                    return
+                self.log_signal.emit("Сервер Ollama запущен")
+
+            # Проверяем, загружена ли уже модель
+            if self.check_model_loaded():
+                self.log_signal.emit(f"Модель {self.model_name} уже загружена")
+                self.progress_signal.emit(100)
+                self.finish_signal.emit(True)
+                return
+
+            # Загружаем модель через API
+            import requests
+            import json
+
+            self.log_signal.emit(f"Загрузка модели {self.model_name}...")
+            self.progress_signal.emit(0)
+
+            response = requests.post(
+                "http://localhost:11434/api/pull",
+                json={"name": self.model_name},
+                stream=True
+            )
+
+            for line in response.iter_lines():
+                if self.is_cancelled:
+                    break
+
+                if line:
+                    try:
+                        data = json.loads(line)
+                        if 'status' in data:
+                            status = data['status'].lower()
+                            
+                            # Обработка различных статусов
+                            if 'completed' in status:
+                                self.progress_signal.emit(100)
+                                break
+                            elif 'downloading' in status:
+                                try:
+                                    percent_str = data['status'].split('%')[0].split(':')[-1].strip()
+                                    percent = int(float(percent_str))
+                                    self.progress_signal.emit(percent)
+                                    self.log_signal.emit(f"Загрузка: {percent}%")
+                                except:
+                                    pass
+                            else:
+                                self.log_signal.emit(f"Статус: {data['status']}")
+
+                        if 'error' in data:
+                            self.log_signal.emit(f"Ошибка: {data['error']}")
+                            self.finish_signal.emit(False)
+                            return
+                    except json.JSONDecodeError:
+                        continue
+
+            # Проверяем, что модель действительно загружена и работает
+            retry_count = 0
+            while retry_count < 3:
+                if self.check_model_loaded():
+                    self.log_signal.emit(f"Модель {self.model_name} успешно загружена и готова к работе")
+                    self.finish_signal.emit(True)
+                    return
+                retry_count += 1
+                time.sleep(2)
+
+            self.log_signal.emit("Ошибка: Не удалось проверить работоспособность модели")
+            self.finish_signal.emit(False)
+
+        except Exception as e:
+            self.log_signal.emit(f"Ошибка при запуске модели: {str(e)}")
+            self.finish_signal.emit(False)
+
+    def cancel(self):
+        """Отмена запуска"""
+        self.is_cancelled = True
+        if self.server_process:
+            self.server_process.terminate()

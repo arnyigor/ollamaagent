@@ -436,19 +436,17 @@ class OllamaSettings(QDialog):
         # Инициализируем состояние кнопок
         self.update_buttons_state()
 
+        # Проверяем ollama перед всем остальным
+        self.log("Проверка ollama...")
+        if not self.check_ollama():
+            return  # Прекращаем инициализацию, если ollama не найден
+            
         # Читаем системную переменную OLLAMA_MODELS
-        models_dir = self.get_system_env_variable("OLLAMA_MODELS")
-        if models_dir:
-            self.install_dir = models_dir
+        self.install_dir = os.getenv("OLLAMA_MODELS", "")
+        if self.install_dir:
             self.log(f"Найдена системная переменная OLLAMA_MODELS: {self.install_dir}")
-        else:
-            self.install_dir = os.path.expanduser("~/.ollama")
-            self.log(f"Системная переменная OLLAMA_MODELS не найдена, используется путь по умолчанию: {self.install_dir}")
-
-        self.selected_dir_label.setText(f"Папка: {self.install_dir}")
         
-        # Обновляем список запущенных моделей при запуске
-        self.update_running_models()
+        # Остальной код инициализации...
 
     def log(self, message: str):
         from datetime import datetime
@@ -604,31 +602,80 @@ class OllamaSettings(QDialog):
             self.log(f"Ошибка при выборе папки: {str(e)}")
 
     def check_ollama(self):
+        """Проверка наличия и доступности ollama"""
         try:
-            self.log("Проверка ollama...")
-            success, message = check_ollama_version()
+            # Проверяем текущий PATH
+            current_path = os.environ.get('PATH', '').split(os.pathsep)
+            ollama_dir = None
 
-            if success:
-                self.log(f"Ollama установлен! Версия: {message}")
-            else:
-                self.log(f"Ошибка: {message}")
-                if sys.platform == "win32":
-                    self.log("\nДля Windows:")
-                    self.log("1. Найдите путь к папке, где установлен ollama.exe")
-                    self.log("2. Добавьте этот путь в переменную PATH:")
-                    self.log("   - Нажмите Win + R, введите sysdm.cpl и нажмите Enter")
-                    self.log("   - Перейдите на вкладку 'Дополнительно'")
-                    self.log("   - Нажмите 'Переменные среды'")
-                    self.log("   - В разделе 'Переменные среды пользователя' найдите Path")
-                    self.log("   - Добавьте путь к папке с ollama.exe")
-                    self.log("   - Нажмите OK")
-                    self.log(
-                        "\nВажно: После добавления пути в PATH необходимо перезагрузить компьютер!")
+            # Сначала пробуем найти ollama через where
+            try:
+                result = subprocess.run(
+                    ["where", "ollama"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    ollama_path = result.stdout.strip().split('\n')[0]
+                    ollama_dir = os.path.dirname(ollama_path)
+                    self.log(f"Найден ollama.exe в PATH: {ollama_path}")
+                    
+                    # Проверяем версию
+                    version_result = subprocess.run(
+                        ["ollama", "--version"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if version_result.returncode == 0:
+                        version = version_result.stdout.strip()
+                        self.log(f"Версия Ollama: {version}")
+                    return True
+            except Exception:
+                pass
 
+            # Если не нашли в PATH, проверяем стандартные пути установки
+            standard_paths = [
+                os.path.expanduser("~\\AppData\\Local\\Programs\\Ollama"),
+                "C:\\Program Files\\Ollama",
+                "C:\\Program Files (x86)\\Ollama",
+                os.path.dirname(os.path.abspath(sys.argv[0]))  # Директория с exe
+            ]
+            
+            # Проверяем каждый путь
+            for path in standard_paths:
+                ollama_exe = os.path.join(path, "ollama.exe")
+                if os.path.exists(ollama_exe):
+                    # Проверяем, действительно ли путь отсутствует в PATH
+                    path_normalized = os.path.normpath(path).lower()
+                    if not any(os.path.normpath(p).lower() == path_normalized for p in current_path):
+                        self.log(f"Найден ollama.exe, но путь не добавлен в PATH: {ollama_exe}")
+                        self.log("Для работы приложения необходимо добавить путь в переменную PATH:")
+                        self.log(f"1. Добавьте '{path}' в переменную PATH")
+                        self.log("2. Перезагрузите компьютер")
+                        return False
+                    else:
+                        # Путь есть в PATH, но почему-то where его не нашел
+                        self.log(f"Найден ollama.exe: {ollama_exe}")
+                        return True
+
+            # Если нигде не нашли
+            self.log("Ошибка: Ollama не найден. Убедитесь, что:")
+            self.log("1. Ollama установлен в системе")
+            self.log("2. Стандартный путь установки: C:\\Users\\<username>\\AppData\\Local\\Programs\\Ollama")
+            self.log("")
+            self.log("Для установки Ollama:")
+            self.log("1. Скачайте установщик с https://ollama.com/download")
+            self.log("2. Запустите установщик")
+            self.log("3. Следуйте инструкциям установщика")
+            self.log("4. Перезагрузите компьютер после установки")
+            
+            return False
+            
         except Exception as e:
-            self.log(f"Неожиданная ошибка: {str(e)}")
-            import traceback
-            self.log(traceback.format_exc())
+            self.log(f"Ошибка при проверке ollama: {str(e)}")
+            return False
 
     def start_install(self):
         model_name = self.model_input.text().strip() or \

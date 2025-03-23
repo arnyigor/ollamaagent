@@ -1,42 +1,44 @@
-import json
-import requests
 import atexit
-from typing import List, Dict, Tuple, Optional
+import json
 import logging
 import time
+from typing import List, Dict, Tuple
+
 import psutil
+import requests
+
 
 class OllamaAPI:
     def __init__(self, host: str = "http://localhost:11434"):
         self.host = host.rstrip('/')
         self.running_models = set()
-        
+
         # Настройка логирования
         self.logger = logging.getLogger('OllamaAPI')
         self.logger.setLevel(logging.INFO)
-        
+
         # Добавляем обработчик для файла
         fh = logging.FileHandler('ollama_api.log')
         fh.setLevel(logging.INFO)
-        
+
         # Добавляем обработчик для консоли
         ch = logging.StreamHandler()
         ch.setLevel(logging.INFO)
-        
+
         # Создаем форматтер
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         fh.setFormatter(formatter)
         ch.setFormatter(formatter)
-        
+
         # Добавляем обработчики в логгер
         self.logger.addHandler(fh)
         self.logger.addHandler(ch)
-        
+
         # Регистрируем функцию очистки при выходе
         atexit.register(self.cleanup)
-        
+
         self.logger.info("OllamaAPI initialized with host: %s", host)
-        
+
     def cleanup(self):
         """Остановка всех запущенных моделей при выходе"""
         for model in list(self.running_models):
@@ -44,14 +46,14 @@ class OllamaAPI:
                 self.stop_model(model)
             except Exception as e:
                 print(f"Ошибка при остановке модели {model}: {e}")
-                
+
     def get_models(self) -> List[Dict[str, str]]:
         """Получение списка установленных моделей"""
         try:
             response = requests.get(f"{self.host}/api/tags")
             response.raise_for_status()
             data = response.json()
-            
+
             models = []
             for model in data.get('models', []):
                 name = model.get('name', '')
@@ -72,7 +74,7 @@ class OllamaAPI:
             if self.is_model_running(model):
                 self.running_models.add(model)
                 return True
-                
+
             # Отправляем тестовый запрос для запуска модели
             response = requests.post(
                 f"{self.host}/api/generate",
@@ -83,12 +85,12 @@ class OllamaAPI:
                 },
                 timeout=30
             )
-            
+
             if response.status_code == 200:
                 self.running_models.add(model)
                 return True
             return False
-            
+
         except requests.exceptions.Timeout:
             # Для некоторых моделей это нормально
             self.running_models.add(model)
@@ -111,11 +113,11 @@ class OllamaAPI:
         try:
             start_time = time.time()
             self.logger.info(f"Starting generation with model {model}")
-            
+
             # Мониторинг ресурсов
             process = psutil.Process()
             initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-            
+
             # Базовые параметры
             data = {
                 "model": model,
@@ -135,15 +137,15 @@ class OllamaAPI:
                     "mirostat_eta": kwargs.get('mirostat_eta', 0.1),
                 }
             }
-            
+
             # Добавляем системный промпт если есть
             if system:
                 data["system"] = system
-                
+
             # Добавляем seed если указан
             if 'seed' in kwargs:
                 data["options"]["seed"] = kwargs['seed']
-                
+
             # Добавляем stop последовательности если указаны
             if 'stop' in kwargs:
                 data["options"]["stop"] = kwargs['stop']
@@ -155,13 +157,13 @@ class OllamaAPI:
                 timeout=30
             )
             response.raise_for_status()
-            
+
             # Собираем метрики
             end_time = time.time()
             final_memory = process.memory_info().rss / 1024 / 1024
             generation_time = end_time - start_time
             memory_used = final_memory - initial_memory
-            
+
             # Логируем метрики
             self.logger.info(
                 "Generation completed - Time: %.2fs, Memory: %.2fMB, Tokens: %d",
@@ -169,7 +171,7 @@ class OllamaAPI:
                 memory_used,
                 len(response.json().get('response', '').split())
             )
-            
+
             return response.json()['response']
 
         except requests.exceptions.RequestException as e:
@@ -184,11 +186,11 @@ class OllamaAPI:
         try:
             start_time = time.time()
             self.logger.info(f"Starting streaming generation with model {model}")
-            
+
             # Мониторинг ресурсов
             process = psutil.Process()
             initial_memory = process.memory_info().rss / 1024 / 1024
-            
+
             # Базовые параметры
             data = {
                 "model": model,
@@ -208,28 +210,28 @@ class OllamaAPI:
                     "mirostat_eta": kwargs.get('mirostat_eta', 0.1),
                 }
             }
-            
+
             if system:
                 data["system"] = system
-                
+
             if 'seed' in kwargs:
                 data["options"]["seed"] = kwargs['seed']
-                
+
             if 'stop' in kwargs:
                 data["options"]["stop"] = kwargs['stop']
 
             total_tokens = 0
             chunk_times = []
-            
+
             with requests.post(
-                f"{self.host}/api/generate",
-                json=data,
-                stream=True,
-                timeout=30
+                    f"{self.host}/api/generate",
+                    json=data,
+                    stream=True,
+                    timeout=30
             ) as response:
                 response.raise_for_status()
                 chunk_start = time.time()
-                
+
                 for line in response.iter_lines():
                     if line:
                         try:
@@ -241,9 +243,9 @@ class OllamaAPI:
                                 chunk_time = time.time() - chunk_start
                                 chunk_times.append(chunk_time)
                                 chunk_start = time.time()
-                                
+
                                 yield chunk_data['response']
-                                
+
                         except json.JSONDecodeError:
                             continue
 
@@ -253,7 +255,7 @@ class OllamaAPI:
             total_time = end_time - start_time
             memory_used = final_memory - initial_memory
             avg_chunk_time = sum(chunk_times) / len(chunk_times) if chunk_times else 0
-            
+
             # Логируем метрики стриминга
             self.logger.info(
                 "Streaming completed - Total Time: %.2fs, Avg Chunk Time: %.3fs, Memory: %.2fMB, Tokens: %d",
@@ -272,7 +274,8 @@ class OllamaAPI:
 
     def stop_all_models(self):
         """Остановка всех запущенных моделей"""
-        for model in list(self.running_models):  # Используем копию списка, так как он будет изменяться
+        for model in list(
+                self.running_models):  # Используем копию списка, так как он будет изменяться
             try:
                 if self.stop_model(model):
                     logging.info(f"Модель {model} успешно остановлена")
@@ -302,11 +305,11 @@ class OllamaAPI:
             response = requests.get(f"{self.host}/api/ps")
             if response.status_code != 200:
                 return False
-                
+
             data = response.json()
             running_models = data.get('models', [])
-            
+
             # Проверяем, есть ли наша модель в списке запущенных
             return any(m.get('name') == model for m in running_models)
         except Exception:
-            return False 
+            return False

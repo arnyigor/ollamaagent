@@ -1,10 +1,9 @@
-import os
 import logging
 import os
 import subprocess
 import sys
-import webbrowser
 import time
+import webbrowser
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -432,20 +431,21 @@ class OllamaSettings(QDialog):
         # Подключаем сигналы изменения выбора в комбобоксах
         self.model_combo.currentIndexChanged.connect(self.update_buttons_state)
         self.running_combo.currentIndexChanged.connect(self.update_buttons_state)
-        
+
         # Инициализируем состояние кнопок
         self.update_buttons_state()
 
         # Проверяем ollama перед всем остальным
         self.log("Проверка ollama...")
-        if not self.check_ollama():
+        self.ollama_exe = self.check_ollama()
+        if not self.ollama_exe:
             return  # Прекращаем инициализацию, если ollama не найден
-            
+
         # Читаем системную переменную OLLAMA_MODELS
         self.install_dir = os.getenv("OLLAMA_MODELS", "")
         if self.install_dir:
             self.log(f"Найдена системная переменная OLLAMA_MODELS: {self.install_dir}")
-        
+
         # Остальной код инициализации...
 
     def log(self, message: str):
@@ -456,8 +456,8 @@ class OllamaSettings(QDialog):
 
     def show_model_details(self):
         selected_text = self.model_combo.currentText()
-        if not selected_text:
-            self.log("Модель не выбрана")
+        if not selected_text or not self.ollama_exe:
+            self.log("Модель не выбрана или ollama недоступен")
             return
 
         model_name = selected_text.split(" (")[0]
@@ -473,7 +473,7 @@ class OllamaSettings(QDialog):
         # Получаем дополнительную информацию о модели через ollama show
         try:
             result = subprocess.run(
-                ["ollama", "show", model_name],
+                [self.ollama_exe, "show", model_name],
                 capture_output=True,
                 text=True,
                 timeout=5
@@ -486,66 +486,72 @@ class OllamaSettings(QDialog):
         dialog.setWindowTitle("Детали модели")
         dialog.setMinimumWidth(500)
         layout = QFormLayout()
-        
+
         # Основная информация
         layout.addRow("Имя модели:", QLabel(model_info['name']))
         layout.addRow("Размер:", QLabel(model_info['size']))
         layout.addRow("Полный путь:", QLabel(model_info['path']))
-        
+
         # Дополнительная информация
         info_text = QTextEdit()
         info_text.setReadOnly(True)
         info_text.setPlainText(additional_info)
         info_text.setMinimumHeight(200)
         layout.addRow("Дополнительная информация:", info_text)
-        
+
         dialog.setLayout(layout)
         dialog.exec()
 
     def update_model_list(self):
-        previous_model = self.model_combo.currentText().split(" (")[0] if self.model_combo.currentText() else ""
+        if not self.ollama_exe:
+            return
+
+        previous_model = self.model_combo.currentText().split(" (")[
+            0] if self.model_combo.currentText() else ""
         self.models_info = []
         self.model_combo.clear()
         try:
             result = subprocess.run(
-                ["ollama", "list"],
+                [self.ollama_exe, "list"],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
-            if "No models installed" in result.stderr:
+            if result.returncode != 0 or "no models" in result.stderr.lower():
                 self.log("Моделей не найдено")
                 return
 
-            lines = result.stdout.strip().split('\n')[1:]
-            for line in lines:
-                parts = line.strip().split()
-                if len(parts) < 3:
-                    continue
+            lines = result.stdout.strip().split('\n')
+            if len(lines) > 1:  # Пропускаем заголовок
+                for line in lines[1:]:
+                    parts = line.strip().split()
+                    if len(parts) < 3:
+                        continue
 
-                name = parts[0]
-                size = parts[2]
-                ollama_home = os.getenv("OLLAMA_HOME", self.install_dir)
-                path = os.path.expanduser(f"{ollama_home}/models/{name}")
-                self.models_info.append({
-                    "name": name,
-                    "size": size,
-                    "path": path
-                })
-                self.model_combo.addItem(f"{name} ({size})")
+                    name = parts[0]
+                    size = parts[2]
+                    ollama_home = os.getenv("OLLAMA_HOME", self.install_dir)
+                    path = os.path.expanduser(f"{ollama_home}/models/{name}")
+                    self.models_info.append({
+                        "name": name,
+                        "size": size,
+                        "path": path
+                    })
+                    self.model_combo.addItem(f"{name} ({size})")
 
-            # Восстанавливаем выбранную модель, если она все еще существует
-            if previous_model:
-                for i in range(self.model_combo.count()):
-                    if previous_model in self.model_combo.itemText(i):
-                        self.model_combo.setCurrentIndex(i)
-                        break
+                # Восстанавливаем выбранную модель
+                if previous_model:
+                    for i in range(self.model_combo.count()):
+                        if previous_model in self.model_combo.itemText(i):
+                            self.model_combo.setCurrentIndex(i)
+                            break
 
-            self.log(f"Найдено моделей: {len(self.models_info)}")
+                self.log(f"Найдено моделей: {len(self.models_info)}")
+            else:
+                self.log("Моделей не найдено")
         except Exception as e:
             self.log(f"Ошибка получения списка: {str(e)}")
-        
-        # Обновляем состояние кнопок
+
         self.update_buttons_state()
 
     def update_selected_model(self, index):
@@ -553,8 +559,8 @@ class OllamaSettings(QDialog):
         self.selected_model_name = selected_text.split(" (")[0] if selected_text else None
 
     def delete_model(self):
-        if not self.selected_model_name:
-            self.log("Модель не выбрана")
+        if not self.selected_model_name or not self.ollama_exe:
+            self.log("Модель не выбрана или ollama недоступен")
             return
 
         confirm = QMessageBox.question(
@@ -566,7 +572,7 @@ class OllamaSettings(QDialog):
         if confirm == QMessageBox.StandardButton.Yes:
             try:
                 result = subprocess.run(
-                    ["ollama", "rm", self.selected_model_name],
+                    [self.ollama_exe, "rm", self.selected_model_name],
                     capture_output=True,
                     text=True,
                     timeout=10
@@ -604,78 +610,131 @@ class OllamaSettings(QDialog):
     def check_ollama(self):
         """Проверка наличия и доступности ollama"""
         try:
-            # Проверяем текущий PATH
-            current_path = os.environ.get('PATH', '').split(os.pathsep)
-            ollama_dir = None
+            if sys.platform == "win32":
+                # Получаем все пути из PATH
+                paths = []
 
-            # Сначала пробуем найти ollama через where
-            try:
-                result = subprocess.run(
-                    ["where", "ollama"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                if result.returncode == 0:
-                    ollama_path = result.stdout.strip().split('\n')[0]
-                    ollama_dir = os.path.dirname(ollama_path)
-                    self.log(f"Найден ollama.exe в PATH: {ollama_path}")
-                    
-                    # Проверяем версию
-                    version_result = subprocess.run(
-                        ["ollama", "--version"],
+                # Системный PATH
+                try:
+                    import winreg
+                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                         "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+                                         0, winreg.KEY_READ)
+                    system_path = winreg.QueryValueEx(key, "Path")[0]
+                    paths.extend(system_path.split(";"))
+                    winreg.CloseKey(key)
+                except Exception:
+                    pass
+
+                # Пользовательский PATH
+                try:
+                    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                         "Environment",
+                                         0, winreg.KEY_READ)
+                    user_path = winreg.QueryValueEx(key, "Path")[0]
+                    paths.extend(user_path.split(";"))
+                    winreg.CloseKey(key)
+                except Exception:
+                    pass
+
+                # Текущий PATH из переменной окружения
+                if "PATH" in os.environ:
+                    paths.extend(os.environ["PATH"].split(os.pathsep))
+
+                # Удаляем дубликаты и пустые строки
+                paths = list(filter(None, set(paths)))
+
+                # Проверяем наличие ollama.exe в каждом пути
+                for path in paths:
+                    try:
+                        ollama_path = os.path.join(path.strip(), "ollama.exe")
+                        if os.path.exists(ollama_path):
+                            self.log(f"Найден ollama.exe в PATH: {ollama_path}")
+
+                            # Проверяем версию
+                            try:
+                                version_result = subprocess.run(
+                                    [ollama_path, "--version"],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=5
+                                )
+                                if version_result.returncode == 0:
+                                    version = version_result.stdout.strip()
+                                    self.log(f"Версия Ollama: {version}")
+                                    return ollama_path
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
+
+                # Если не нашли в PATH, проверяем стандартный путь установки
+                standard_path = os.path.expanduser(
+                    "~\\AppData\\Local\\Programs\\Ollama\\ollama.exe")
+                if os.path.exists(standard_path):
+                    self.log(f"Найден ollama.exe: {standard_path}")
+                    self.log("ВНИМАНИЕ: ollama.exe найден, но не добавлен в PATH")
+                    self.log("Для работы приложения:")
+                    self.log("1. Закройте это приложение")
+                    self.log("2. Запустите его от имени администратора")
+                    self.log("3. Путь к ollama.exe будет добавлен в PATH автоматически")
+
+                    # Показываем диалог с предупреждением
+                    QMessageBox.warning(
+                        self,
+                        "Требуются права администратора",
+                        "Для корректной работы приложения необходимо:\n\n"
+                        "1. Закрыть это приложение\n"
+                        "2. Запустить его от имени администратора\n"
+                        "3. Путь к ollama.exe будет добавлен в PATH автоматически",
+                        QMessageBox.StandardButton.Ok
+                    )
+                    return None
+
+                # Если нигде не нашли
+                self.log("Ошибка: ollama.exe не найден. Убедитесь, что:")
+                self.log("1. Ollama установлен в системе")
+                self.log("2. Путь к папке с ollama.exe добавлен в PATH")
+                self.log(
+                    "3. Стандартный путь установки: C:\\Users\\<username>\\AppData\\Local\\Programs\\Ollama")
+                return None
+
+            else:
+                # Для macOS просто проверяем наличие в PATH
+                try:
+                    result = subprocess.run(
+                        ["which", "ollama"],
                         capture_output=True,
                         text=True,
                         timeout=5
                     )
-                    if version_result.returncode == 0:
-                        version = version_result.stdout.strip()
-                        self.log(f"Версия Ollama: {version}")
-                    return True
-            except Exception:
-                pass
+                    if result.returncode == 0:
+                        ollama_path = result.stdout.strip()
+                        self.log(f"Найден ollama в PATH: {ollama_path}")
 
-            # Если не нашли в PATH, проверяем стандартные пути установки
-            standard_paths = [
-                os.path.expanduser("~\\AppData\\Local\\Programs\\Ollama"),
-                "C:\\Program Files\\Ollama",
-                "C:\\Program Files (x86)\\Ollama",
-                os.path.dirname(os.path.abspath(sys.argv[0]))  # Директория с exe
-            ]
-            
-            # Проверяем каждый путь
-            for path in standard_paths:
-                ollama_exe = os.path.join(path, "ollama.exe")
-                if os.path.exists(ollama_exe):
-                    # Проверяем, действительно ли путь отсутствует в PATH
-                    path_normalized = os.path.normpath(path).lower()
-                    if not any(os.path.normpath(p).lower() == path_normalized for p in current_path):
-                        self.log(f"Найден ollama.exe, но путь не добавлен в PATH: {ollama_exe}")
-                        self.log("Для работы приложения необходимо добавить путь в переменную PATH:")
-                        self.log(f"1. Добавьте '{path}' в переменную PATH")
-                        self.log("2. Перезагрузите компьютер")
-                        return False
+                        # Проверяем версию
+                        version_result = subprocess.run(
+                            [ollama_path, "--version"],
+                            capture_output=True,
+                            text=True,
+                            timeout=5
+                        )
+                        if version_result.returncode == 0:
+                            version = version_result.stdout.strip()
+                            self.log(f"Версия Ollama: {version}")
+                            return "ollama"
                     else:
-                        # Путь есть в PATH, но почему-то where его не нашел
-                        self.log(f"Найден ollama.exe: {ollama_exe}")
-                        return True
+                        self.log("Ошибка: ollama не найден в PATH")
+                        self.log("Убедитесь, что Ollama установлен и путь добавлен в PATH")
+                        return None
+                except Exception as e:
+                    self.log("Ошибка: ollama не найден в PATH")
+                    self.log("Убедитесь, что Ollama установлен и путь добавлен в PATH")
+                    return None
 
-            # Если нигде не нашли
-            self.log("Ошибка: Ollama не найден. Убедитесь, что:")
-            self.log("1. Ollama установлен в системе")
-            self.log("2. Стандартный путь установки: C:\\Users\\<username>\\AppData\\Local\\Programs\\Ollama")
-            self.log("")
-            self.log("Для установки Ollama:")
-            self.log("1. Скачайте установщик с https://ollama.com/download")
-            self.log("2. Запустите установщик")
-            self.log("3. Следуйте инструкциям установщика")
-            self.log("4. Перезагрузите компьютер после установки")
-            
-            return False
-            
         except Exception as e:
             self.log(f"Ошибка при проверке ollama: {str(e)}")
-            return False
+            return None
 
     def start_install(self):
         model_name = self.model_input.text().strip() or \
@@ -806,136 +865,119 @@ class OllamaSettings(QDialog):
         has_selected_model = self.model_combo.currentText() != ""
         # Проверяем наличие запущенной модели
         has_running_model = self.running_combo.currentText() != ""
-        
+
         # Обновляем состояние кнопок для установленных моделей
         self.delete_model_btn.setEnabled(has_selected_model)
         self.show_details_btn.setEnabled(has_selected_model)
-        
+
         # Кнопка запуска активна только если:
         # 1. Есть выбранная модель
         # 2. Нет запущенных моделей
         self.run_model_btn.setEnabled(has_selected_model and not has_running_model)
-        
+
         # Кнопка остановки активна только если есть запущенная модель
         self.stop_model_btn.setEnabled(has_running_model)
-        
+
         # Кнопки обновления всегда активны
         self.refresh_running_btn.setEnabled(True)
         self.list_model_btn.setEnabled(True)
 
     def update_running_models(self):
         """Обновление списка запущенных моделей"""
+        if not self.ollama_exe:
+            return
+
         previous_model = self.running_combo.currentText()
         self.running_combo.clear()
         try:
             result = subprocess.run(
-                ["ollama", "ps"],
+                [self.ollama_exe, "ps"],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
             if result.returncode == 0 and result.stdout.strip():
-                lines = result.stdout.strip().split('\n')[1:]  # Пропускаем заголовок
-                for line in lines:
-                    parts = line.strip().split()
-                    if parts:
-                        model_name = parts[0]
-                        self.running_combo.addItem(model_name)
-                self.log(f"Найдено запущенных моделей: {len(lines)}")
+                lines = result.stdout.strip().split('\n')
+                if len(lines) > 1:  # Пропускаем заголовок
+                    for line in lines[1:]:
+                        parts = line.strip().split()
+                        if parts:
+                            model_name = parts[0]
+                            self.running_combo.addItem(model_name)
+                    self.log(f"Найдено запущенных моделей: {len(lines) - 1}")
+                else:
+                    self.log("Нет запущенных моделей")
             else:
                 self.log("Нет запущенных моделей")
         except Exception as e:
             self.log(f"Ошибка получения списка запущенных моделей: {str(e)}")
-        
-        # Восстанавливаем выбранную модель, если она все еще запущена
+
+        # Восстанавливаем выбранную модель
         index = self.running_combo.findText(previous_model)
         if index >= 0:
             self.running_combo.setCurrentIndex(index)
-        
-        # Обновляем состояние кнопок
+
         self.update_buttons_state()
 
     def stop_selected_model(self):
         """Остановка выбранной модели"""
+        if not self.ollama_exe:
+            return
+
         model_name = self.running_combo.currentText()
         if not model_name:
             self.log("Модель не выбрана")
             return
 
         try:
-            # Показываем, что идет процесс остановки
             self.stop_model_btn.setEnabled(False)
-            self.run_model_btn.setEnabled(False)  # Блокируем также кнопку запуска
-            self.progress_bar.setMaximum(0)  # Бесконечный прогресс
+            self.run_model_btn.setEnabled(False)
+            self.progress_bar.setMaximum(0)
             self.progress_bar.show()
             self.log(f"Останавливаем модель {model_name}...")
 
             result = subprocess.run(
-                ["ollama", "stop", model_name],
+                [self.ollama_exe, "stop", model_name],
                 capture_output=True,
                 text=True,
                 timeout=10
             )
             if result.returncode == 0:
                 self.log(f"Модель {model_name} остановлена")
-                # Даем время на остановку и проверяем статус
-                time.sleep(1)  # Ждем секунду
-                # Проверяем, действительно ли модель остановлена
-                check_result = subprocess.run(
-                    ["ollama", "ps"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                if model_name not in check_result.stdout:
-                    # Модель действительно остановлена, очищаем список запущенных
-                    self.running_combo.clear()
-                else:
-                    # Если модель все еще в списке, пробуем остановить еще раз
-                    self.log("Повторная попытка остановки...")
-                    subprocess.run(
-                        ["ollama", "stop", model_name],
-                        capture_output=True,
-                        text=True,
-                        timeout=10
-                    )
-                    time.sleep(1)  # Ждем еще секунду
             else:
                 self.log(f"Ошибка остановки модели: {result.stderr}")
 
         except Exception as e:
             self.log(f"Ошибка при остановке модели: {str(e)}")
         finally:
-            # Обновляем состояние интерфейса
             self.progress_bar.hide()
             self.progress_bar.setMaximum(100)
             self.progress_bar.setValue(0)
-            
-            # Сначала обновляем списки моделей
+
+            # Обновляем списки и состояние кнопок
             self.update_running_models()
             self.update_model_list()
-            
-            # Затем принудительно обновляем состояние кнопок
             self.update_buttons_state()
 
     def run_selected_model(self):
         """Запуск выбранной модели"""
+        if not self.ollama_exe:
+            return
+
         model_name = self.model_combo.currentText()
         if not model_name:
             self.log("Модель не выбрана")
             return
 
-        model_name = model_name.split(" (")[0]  # Получаем только имя модели без размера
-        
-        # Блокируем кнопку запуска и показываем прогресс
+        model_name = model_name.split(" (")[0]
+
         self.run_model_btn.setEnabled(False)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.show()
-        
-        # Создаем и запускаем поток
-        self.run_worker = RunModelWorker(model_name)
+
+        self.run_worker = RunModelWorker(model_name, self.ollama_exe)
         self.run_worker.log_signal.connect(self.log)
         self.run_worker.progress_signal.connect(self.update_progress)
         self.run_worker.finish_signal.connect(self.run_finished)
@@ -950,11 +992,11 @@ class OllamaSettings(QDialog):
         """Обработка завершения запуска модели"""
         # Скрываем прогресс
         self.progress_bar.hide()
-        
+
         # Обновляем списки моделей и состояние кнопок
         self.update_running_models()
         self.update_model_list()
-        
+
         if success:
             self.log("Модель успешно запущена и готова к использованию")
         else:
@@ -967,9 +1009,10 @@ class RunModelWorker(QThread):
     progress_signal = pyqtSignal(int)
     finish_signal = pyqtSignal(bool)
 
-    def __init__(self, model_name):
+    def __init__(self, model_name, ollama_exe):
         super().__init__()
         self.model_name = model_name
+        self.ollama_exe = ollama_exe
         self.server_process = None
         self.is_cancelled = False
 
@@ -996,7 +1039,6 @@ class RunModelWorker(QThread):
         """Проверка загрузки модели"""
         try:
             import requests
-            # Отправляем тестовый запрос к модели
             response = requests.post(
                 "http://localhost:11434/api/generate",
                 json={
@@ -1014,29 +1056,28 @@ class RunModelWorker(QThread):
     def run(self):
         try:
             self.log_signal.emit(f"Запуск модели {self.model_name}...")
-            
+
             # Проверяем сервер
             if not self.check_server():
                 self.log_signal.emit("Запуск сервера Ollama...")
                 if sys.platform == "win32":
                     self.server_process = subprocess.Popen(
-                        ["start", "/B", "ollama", "serve"],
-                        shell=True,
+                        [self.ollama_exe, "serve"],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
-                        encoding='utf-8'
+                        encoding='utf-8',
+                        creationflags=subprocess.CREATE_NO_WINDOW
                     )
                 else:
                     self.server_process = subprocess.Popen(
-                        ["ollama", "serve"],
+                        [self.ollama_exe, "serve"],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
                         encoding='utf-8'
                     )
-                
-                # Ждем запуска сервера
+
                 if not self.wait_for_server():
                     self.log_signal.emit("Ошибка: Сервер не запустился")
                     self.finish_signal.emit(False)
@@ -1072,14 +1113,14 @@ class RunModelWorker(QThread):
                         data = json.loads(line)
                         if 'status' in data:
                             status = data['status'].lower()
-                            
-                            # Обработка различных статусов
+
                             if 'completed' in status:
                                 self.progress_signal.emit(100)
                                 break
                             elif 'downloading' in status:
                                 try:
-                                    percent_str = data['status'].split('%')[0].split(':')[-1].strip()
+                                    percent_str = data['status'].split('%')[0].split(':')[
+                                        -1].strip()
                                     percent = int(float(percent_str))
                                     self.progress_signal.emit(percent)
                                     self.log_signal.emit(f"Загрузка: {percent}%")
@@ -1095,11 +1136,12 @@ class RunModelWorker(QThread):
                     except json.JSONDecodeError:
                         continue
 
-            # Проверяем, что модель действительно загружена и работает
+            # Проверяем работоспособность модели
             retry_count = 0
             while retry_count < 3:
                 if self.check_model_loaded():
-                    self.log_signal.emit(f"Модель {self.model_name} успешно загружена и готова к работе")
+                    self.log_signal.emit(
+                        f"Модель {self.model_name} успешно загружена и готова к работе")
                     self.finish_signal.emit(True)
                     return
                 retry_count += 1

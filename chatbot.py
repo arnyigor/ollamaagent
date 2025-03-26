@@ -36,7 +36,8 @@ class ChatWorker(QThread):
             stream = ollama_chat(
                 model=self.model,
                 messages=self.messages,
-                stream=True
+                stream=True,
+                context = []
             )
             buffer = ""
             for chunk in stream:

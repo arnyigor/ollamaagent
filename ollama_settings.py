@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from urllib.parse import quote
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -412,6 +413,8 @@ class OllamaSettings(QDialog):
 
         # Инициализация остальных переменных
         self.install_dir = os.path.expanduser("~/.ollama")
+        self.models_dir = self.get_ollama_models_dir()
+        self.selected_dir_label.setText(f"Папка: {self.models_dir}")
         self.selected_model_name = None
         self.models_info = []
         self.worker = None
@@ -584,6 +587,21 @@ class OllamaSettings(QDialog):
                     self.log(f"Ошибка удаления: {result.stderr}")
             except Exception as e:
                 self.log(f"Ошибка удаления: {str(e)}")
+
+    def get_ollama_models_dir(self):
+        # Проверяем переменную окружения (если установлена)
+        custom_path = os.getenv("OLLAMA_MODELS")
+        if custom_path:
+            self.log(f"Найдена системная переменная OLLAMA_MODELS: {custom_path}")
+            return custom_path
+
+        # Иначе используем стандартный путь для macOS/Linux
+        default_path = os.path.expanduser("~/.ollama/models")
+        if os.path.exists(default_path):
+            self.log(f"Cистемная переменная OLLAMA_MODELS не найдена, установлен путь: {default_path}")
+            return default_path
+        else:
+            return "Модели Ollama не найдены. Убедитесь, что Ollama установлен и модели загружены."
 
     def select_install_dir(self):
         try:
@@ -792,52 +810,25 @@ class OllamaSettings(QDialog):
         else:
             self.log("Установка прервана или завершилась с ошибкой")
 
-    def get_system_env_variable(self, name: str) -> str:
-        """Получение системной переменной окружения"""
-        try:
-            if sys.platform == "win32":
-                import winreg
-                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                     "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
-                                     0, winreg.KEY_READ)
-                value, _ = winreg.QueryValueEx(key, name)
-                winreg.CloseKey(key)
-                return value
-            else:
-                # Для Linux/Mac проверяем различные файлы конфигурации
-                possible_files = [
-                    os.path.expanduser("~/.bashrc"),
-                    os.path.expanduser("~/.bash_profile"),
-                    os.path.expanduser("~/.zshrc"),
-                    "/etc/environment"
-                ]
-
-                for file_path in possible_files:
-                    if os.path.exists(file_path):
-                        with open(file_path, "r") as f:
-                            content = f.read()
-                            # Ищем строку вида: export NAME=value или NAME=value
-                            import re
-                            match = re.search(f"(?:export\s+)?{name}=[\"']?([^\"'\n]+)[\"']?",
-                                              content)
-                            if match:
-                                return match.group(1)
-
-                return ""
-        except Exception as e:
-            self.log(f"Ошибка чтения переменной {name}: {str(e)}")
-            return ""
-
     def open_ollama_library(self):
-        """Открыть библиотеку моделей Ollama в браузере"""
+        """Открыть библиотеку моделей Ollama в браузере с поиском по введённому имени"""
+        model_name = self.model_input.text().strip()  # Получаем имя модели из поля ввода
+
         try:
-            webbrowser.open("https://ollama.com/library")
+            # Формируем URL с параметром поиска
+            base_url = "https://ollama.com/library"
+            if model_name:
+                search_url = f"{base_url}?q={quote(model_name)}"
+            else:
+                search_url = base_url  # Если имя пустое, открываем основную страницу
+
+            webbrowser.open(search_url)
         except Exception as e:
             logging.error(f"Ошибка при открытии библиотеки моделей: {str(e)}")
             QMessageBox.warning(
                 self,
                 "Ошибка",
-                "Не удалось открыть библиотеку моделей. Пожалуйста, перейдите по адресу https://ollama.com/library вручную."
+                "Не удалось открыть библиотеку моделей. Пожалуйста, проверьте введённое имя модели и попробуйте снова."
             )
 
     def install_model(self):

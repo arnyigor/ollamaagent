@@ -620,6 +620,8 @@ class OllamaSettings(QDialog):
                 )
                 if confirm == QMessageBox.StandardButton.Yes:
                     self.install_dir = dir_name
+                    # Устанавливаем системную переменную OLLAMA_MODELS
+                    os.environ["OLLAMA_MODELS"] = f"{dir_name}/models"
                     self.selected_dir_label.setText(f"Папка: {self.install_dir}")
                     self.log(f"Папка установки изменена на: {self.install_dir}")
         except Exception as e:

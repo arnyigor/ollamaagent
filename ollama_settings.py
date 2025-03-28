@@ -82,7 +82,7 @@ class InstallWorker(QThread):
                     self.log_signal.emit("Модель еще не была полностью установлена")
                     # Попробуем очистить кэш
                     try:
-                        cache_dir = os.path.join(self.install_dir, "models")
+                        cache_dir = os.path.join(self.install_dir)
                         model_files = [f for f in os.listdir(cache_dir) if
                                        f.startswith(self.model_name)]
                         for f in model_files:
@@ -189,13 +189,13 @@ class InstallWorker(QThread):
         try:
             # Нормализуем пути, заменяя обратные слеши на прямые
             self.install_dir = self.install_dir.replace('\\', '/')
-            models_dir = os.path.join(self.install_dir, "models").replace('\\', '/')
+            models_dir = os.path.join(self.install_dir).replace('\\', '/')
             os.makedirs(models_dir, exist_ok=True)
 
             self.log_signal.emit(f"Выбранная директория установки: {models_dir}")
 
             # Устанавливаем OLLAMA_MODELS как системную переменную
-            if self.set_system_env_variable("OLLAMA_MODELS", models_dir):
+            if self.set_system_env_variable("OLLAMA_MODELS", str(models_dir)):
                 self.log_signal.emit("Установлена системная переменная OLLAMA_MODELS")
                 self.log_signal.emit(
                     "ВАЖНО: Требуется перезагрузка компьютера для применения изменений")
@@ -615,13 +615,13 @@ class OllamaSettings(QDialog):
                 confirm = QMessageBox.warning(
                     self,
                     "Важно!",
-                    f"Модель будет установлена в {dir_name}/models/\nПродолжить?",
+                    f"Модель будет установлена в {dir_name}/\nПродолжить?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 )
                 if confirm == QMessageBox.StandardButton.Yes:
                     self.install_dir = dir_name
                     # Устанавливаем системную переменную OLLAMA_MODELS
-                    os.environ["OLLAMA_MODELS"] = f"{dir_name}/models"
+                    os.environ["OLLAMA_MODELS"] = f"{dir_name}"
                     self.selected_dir_label.setText(f"Папка: {self.install_dir}")
                     self.log(f"Папка установки изменена на: {self.install_dir}")
         except Exception as e:
@@ -808,7 +808,7 @@ class OllamaSettings(QDialog):
         if success:
             self.update_model_list()
             self.log(
-                f"Модель {self.model_input.text()} установлена в {self.install_dir}/models/{self.model_input.text()}!")
+                f"Модель {self.model_input.text()} установлена в {self.install_dir}/{self.model_input.text()}!")
         else:
             self.log("Установка прервана или завершилась с ошибкой")
 

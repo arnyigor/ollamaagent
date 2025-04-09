@@ -1,6 +1,8 @@
 import logging
 import sys
 from PyQt6.QtWidgets import QApplication
+
+from chat_window import ChatWindow
 from ollama_settings import OllamaSettings
 
 # Настройка логирования
@@ -15,7 +17,7 @@ def main():
         app = QApplication(sys.argv)
         app.setStyle("Fusion")
         
-        window = OllamaSettings()
+        window = ChatWindow()
         window.show()
         
         return app.exec()

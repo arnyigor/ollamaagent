@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QProgressBar
 )
 
+from lmstudio_settings import LmStudioSettings
+
 
 def check_ollama_version():
     """Проверка версии ollama"""
@@ -287,7 +289,6 @@ class OllamaSettings(QDialog):
         # Кнопка перехода в библиотеку
         library_button = QPushButton("📚")
         library_button.setToolTip("Открыть библиотеку моделей Ollama")
-        library_button.setFixedWidth(40)
         library_button.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
@@ -306,6 +307,27 @@ class OllamaSettings(QDialog):
         """)
         library_button.clicked.connect(self.open_ollama_library)
         input_layout.addWidget(library_button)
+
+        # Кнопка LmStudio
+        self.lmstudio_button = QPushButton("LMStudio")
+        self.lmstudio_button.setToolTip("Открыть LmStudio для управления моделями Ollama")
+        self.lmstudio_button.setStyleSheet("""
+           QPushButton {
+              background-color: #2196F3;
+               color: white;
+               border: none;
+               border-radius: 4px;
+               padding: 8px;
+               font-size: 16px;
+           }
+           QPushButton:hover {
+               background-color: #1976D2;
+           }
+           QPushButton:pressed {
+               background-color: #1565C0;
+           }
+        """)
+        self.lmstudio_button.clicked.connect(self.open_lmstudio)
 
         # Кнопка установки
         self.install_button = QPushButton("Установить")
@@ -329,6 +351,7 @@ class OllamaSettings(QDialog):
         """)
         self.install_button.clicked.connect(self.install_model)
         input_layout.addWidget(self.install_button)
+        input_layout.addWidget(self.lmstudio_button)
 
         install_group.addLayout(input_layout)
         layout.addLayout(install_group)
@@ -811,6 +834,11 @@ class OllamaSettings(QDialog):
                 f"Модель {self.model_input.text()} установлена в {self.install_dir}/{self.model_input.text()}!")
         else:
             self.log("Установка прервана или завершилась с ошибкой")
+
+    def open_lmstudio(self):
+        """Открыть диалоговое окно LLMStudio"""
+        lmstudio_settings = LmStudioSettings(self)
+        lmstudio_settings.show()
 
     def open_ollama_library(self):
         """Открыть библиотеку моделей Ollama в браузере с поиском по введённому имени"""

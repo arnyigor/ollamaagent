@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QGroupBox, QFormLayout
 )
 
+from jan_settings import JanSettingsWindow
 from ollama_api import OllamaAPI
 from ollama_settings import OllamaSettings
 
@@ -728,6 +729,23 @@ class ChatWindow(QMainWindow):
             """)
             settings_layout.addWidget(ollama_settings_btn)
 
+            # Кнопка настроек Ollama
+            jan_settings_btn = QPushButton("⚙ Jan")
+            jan_settings_btn.clicked.connect(self._show_jan_settings)
+            jan_settings_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #333;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                    margin-top: 10px;
+                }
+                QPushButton:hover { background-color: #5E35B1; }
+                QPushButton:pressed { background-color: #512DA8; }
+            """)
+            settings_layout.addWidget(jan_settings_btn)
+
             left_layout.addLayout(settings_layout)
 
             left_layout.addStretch()
@@ -1293,6 +1311,16 @@ class ChatWindow(QMainWindow):
             settings_dialog.show()  # Используем show() вместо exec()
         except Exception as e:
             logging.error(f"Ошибка при открытии настроек Ollama: {str(e)}")
+            QMessageBox.warning(self, "Ошибка", f"Не удалось открыть настройки: {str(e)}")
+
+
+    def _show_jan_settings(self):
+        """Открыть окно настроек Ollama"""
+        try:
+            jan_settings_window = JanSettingsWindow()
+            jan_settings_window.show()
+        except Exception as e:
+            logging.error(f"Ошибка при открытии настроек Jan: {str(e)}")
             QMessageBox.warning(self, "Ошибка", f"Не удалось открыть настройки: {str(e)}")
 
     def clear_chat(self):

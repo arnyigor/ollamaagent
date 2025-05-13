@@ -466,17 +466,19 @@ class OllamaSettings(QDialog):
         self.log("Проверка ollama...")
         self.ollama_exe = self.check_ollama()
         if not self.ollama_exe:
+            self.log("Ollama не найден. Инициализация прервана.")  # Добавил лог для ясности
             return  # Прекращаем инициализацию, если ollama не найден
 
         # Читаем системную переменную OLLAMA_MODELS
-        self.install_dir = os.getenv("OLLAMA_MODELS", "")
-        if self.install_dir:
+        self.install_dir = os.getenv("OLLAMA_MODELS")  # Можно убрать "" по умолчанию
+        # os.getenv вернет None, если переменная не найдена
+
+        if self.install_dir:  # None или пустая строка будут False
             self.log(f"Найдена системная переменная OLLAMA_MODELS: {self.install_dir}")
         else:
-            self.install_dir = os.path.expanduser("~/.ollama") if not self.install_dir else self.install_dir
-            self.log(f"Установлена install_dir: {self.install_dir}")
-
-        # Остальной код инициализации...
+            self.install_dir = os.path.expanduser("~/.ollama")
+            self.log(
+                f"Системная переменная OLLAMA_MODELS не найдена. Используется путь по умолчанию: {self.install_dir}")
 
     def log(self, message: str):
         from datetime import datetime

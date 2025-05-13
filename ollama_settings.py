@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 import webbrowser
 from urllib.parse import quote
 
@@ -13,7 +14,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QProgressBar
 )
 
-from lmstudio_settings import LmStudioSettings
+# from lmstudio_settings import LmStudioSettings
 
 
 def check_ollama_version():
@@ -308,26 +309,26 @@ class OllamaSettings(QDialog):
         library_button.clicked.connect(self.open_ollama_library)
         input_layout.addWidget(library_button)
 
-        # Кнопка LmStudio
-        self.lmstudio_button = QPushButton("LMStudio")
-        self.lmstudio_button.setToolTip("Открыть LmStudio для управления моделями Ollama")
-        self.lmstudio_button.setStyleSheet("""
-           QPushButton {
-              background-color: #2196F3;
-               color: white;
-               border: none;
-               border-radius: 4px;
-               padding: 8px;
-               font-size: 16px;
-           }
-           QPushButton:hover {
-               background-color: #1976D2;
-           }
-           QPushButton:pressed {
-               background-color: #1565C0;
-           }
-        """)
-        self.lmstudio_button.clicked.connect(self.open_lmstudio)
+        # # Кнопка LmStudio
+        # self.lmstudio_button = QPushButton("LMStudio")
+        # self.lmstudio_button.setToolTip("Открыть LmStudio для управления моделями Ollama")
+        # self.lmstudio_button.setStyleSheet("""
+        #    QPushButton {
+        #       background-color: #2196F3;
+        #        color: white;
+        #        border: none;
+        #        border-radius: 4px;
+        #        padding: 8px;
+        #        font-size: 16px;
+        #    }
+        #    QPushButton:hover {
+        #        background-color: #1976D2;
+        #    }
+        #    QPushButton:pressed {
+        #        background-color: #1565C0;
+        #    }
+        # """)
+        # self.lmstudio_button.clicked.connect(self.open_lmstudio)
 
         # Кнопка установки
         self.install_button = QPushButton("Установить")
@@ -351,7 +352,7 @@ class OllamaSettings(QDialog):
         """)
         self.install_button.clicked.connect(self.install_model)
         input_layout.addWidget(self.install_button)
-        input_layout.addWidget(self.lmstudio_button)
+        # input_layout.addWidget(self.lmstudio_button)
 
         install_group.addLayout(input_layout)
         layout.addLayout(install_group)
@@ -471,6 +472,9 @@ class OllamaSettings(QDialog):
         self.install_dir = os.getenv("OLLAMA_MODELS", "")
         if self.install_dir:
             self.log(f"Найдена системная переменная OLLAMA_MODELS: {self.install_dir}")
+        else:
+            self.install_dir = os.path.expanduser("~/.ollama") if not self.install_dir else self.install_dir
+            self.log(f"Установлена install_dir: {self.install_dir}")
 
         # Остальной код инициализации...
 
@@ -633,6 +637,9 @@ class OllamaSettings(QDialog):
                 "Выберите папку для установки",
                 self.install_dir
             )
+            if not dir_name:
+                self.log("Директория не выбрана!")
+                return
             if dir_name:
                 dir_name = os.path.normpath(dir_name)
                 confirm = QMessageBox.warning(
@@ -779,23 +786,6 @@ class OllamaSettings(QDialog):
             self.log(f"Ошибка при проверке ollama: {str(e)}")
             return None
 
-    def start_install(self):
-        model_name = self.model_input.text().strip() or \
-                     self.recommended_combo.currentText().split(" (")[0]
-        if not model_name:
-            self.log("Ошибка: Не указано имя модели")
-            return
-
-        self.current_model = model_name  # Сохраняем имя текущей модели
-        self.worker = InstallWorker(model_name, self.install_dir)
-        self.worker.log_signal.connect(self.log)
-        self.worker.finish_signal.connect(self.install_finished)
-        self.worker.start()
-
-        # Активируем кнопку отмены и блокируем кнопку установки
-        self.cancel_btn.setEnabled(True)
-        self.install_button.setEnabled(False)
-
     def cancel_install(self):
         if self.worker:
             self.worker.cancel()
@@ -835,10 +825,10 @@ class OllamaSettings(QDialog):
         else:
             self.log("Установка прервана или завершилась с ошибкой")
 
-    def open_lmstudio(self):
-        """Открыть диалоговое окно LLMStudio"""
-        lmstudio_settings = LmStudioSettings(self)
-        lmstudio_settings.show()
+    # def open_lmstudio(self):
+    #     """Открыть диалоговое окно LLMStudio"""
+    #     lmstudio_settings = LmStudioSettings(self)
+    #     lmstudio_settings.show()
 
     def open_ollama_library(self):
         """Открыть библиотеку моделей Ollama в браузере с поиском по введённому имени"""
@@ -863,22 +853,27 @@ class OllamaSettings(QDialog):
 
     def install_model(self):
         """Обработчик нажатия кнопки установки модели"""
-        model_name = self.model_input.text().strip()
-        if not model_name:
-            model_name = self.recommended_combo.currentText().split(" (")[0]
+        try:
+            model_name = self.model_input.text().strip()
             if not model_name:
-                self.log("Ошибка: Не указано имя модели")
-                return
+                model_name = self.recommended_combo.currentText().split(" (")[0]
+                if not model_name:
+                    self.log("Ошибка: Не указано имя модели")
+                    return
 
-        self.current_model = model_name
-        self.worker = InstallWorker(model_name, self.install_dir)
-        self.worker.log_signal.connect(self.log)
-        self.worker.finish_signal.connect(self.install_finished)
-        self.worker.start()
+            self.current_model = model_name
+            self.worker = InstallWorker(model_name, self.install_dir)
+            self.worker.log_signal.connect(self.log)
+            self.worker.finish_signal.connect(self.install_finished)
+            self.worker.start()
 
-        # Блокируем кнопку установки и активируем кнопку отмены
-        self.install_button.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
+            # Блокируем кнопку установки и активируем кнопку отмены
+            self.install_button.setEnabled(False)
+            self.cancel_btn.setEnabled(True)
+        except Exception as e:
+            logging.error(f"Ошибка установки модели: {str(e,)}", exc_info=True, stack_info = True)
+            self.log(f"Ошибка установки модели: {str(e)}")
+            self.log(traceback.format_exc())  # Добавить стектрейс
 
     def update_buttons_state(self):
         """Обновление состояния кнопок интерфейса"""

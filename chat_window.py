@@ -16,7 +16,7 @@ from ollama_settings import OllamaSettings
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
     stream=sys.stdout
 )
@@ -731,7 +731,7 @@ class ChatWindow(QMainWindow):
 
             # Кнопка настроек Ollama
             jan_settings_btn = QPushButton("⚙ Jan")
-            jan_settings_btn.clicked.connect(self._show_jan_settings)
+            # jan_settings_btn.clicked.connect(self._show_jan_settings)
             jan_settings_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #333;
@@ -1314,15 +1314,18 @@ class ChatWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", f"Не удалось открыть настройки: {str(e)}")
 
 
-    def _show_jan_settings(self):
-        """Открыть окно настроек Ollama"""
-        try:
-            jan_settings_window = JanSettingsWindow()
-            jan_settings_window.show()
-        except Exception as e:
-            logging.error(f"Ошибка при открытии настроек Jan: {str(e)}")
-            QMessageBox.warning(self, "Ошибка", f"Не удалось открыть настройки: {str(e)}")
-
+def _show_jan_settings(self):
+    """Открыть окно настроек Ollama"""
+    try:
+        # Сохраняем ссылку на окно как атрибут класса
+        if not hasattr(self, '_jan_settings_window'):
+            self._jan_settings_window = JanSettingsWindow()
+        self._jan_settings_window.show()
+        self._jan_settings_window.raise_()  # Поднимаем окно на передний план
+        self._jan_settings_window.activateWindow()  # Активируем окно
+    except Exception as e:
+        logging.error(f"Ошибка при открытии настроек Jan: {str(e)}")
+        QMessageBox.warning(self, "Ошибка", f"Не удалось открыть настройки: {str(e)}")
     def clear_chat(self):
         """Очистка истории чата"""
         reply = QMessageBox.question(

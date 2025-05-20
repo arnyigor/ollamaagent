@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QComboBox, QLabel,
     QSplitter, QFrame, QScrollArea, QSpinBox, QDoubleSpinBox,
-    QMessageBox, QGroupBox, QFormLayout
+    QMessageBox, QGroupBox, QFormLayout, QCheckBox
 )
 
 from jan_settings import JanSettingsWindow
@@ -107,6 +107,7 @@ class ChatHistory(QTextEdit):
             return
 
         sender = "Вы" if is_user else "Ассистент"
+        sender = str(sender).encode('utf-8').decode('utf-8')
         color = "#2962FF" if is_user else "#00838F"
         bg_color = "#F5F5F5" if is_user else "#FFFFFF"
 
@@ -131,9 +132,10 @@ class ChatHistory(QTextEdit):
 
         # Текст сообщения
         if text.strip():
+            text = str(text).encode('utf-8').decode('utf-8')
             message_html += (
                 f'<div style="white-space: pre-wrap; margin-left: 10px;">'
-                f'{text.strip()}</div>'
+                f'{text.strip()}<br></div>'
             )
 
         # Информация о производительности
@@ -178,8 +180,8 @@ class ChatHistory(QTextEdit):
             self._insert_message_safely(self.current_message_html)
 
         # Добавляем пробел перед чанком, если нужно
-        if chunk and not chunk.startswith(' ') and not self.current_message_html.endswith(' '):
-            chunk = ' ' + chunk
+        # if chunk and not chunk.startswith(' ') and not self.current_message_html.endswith(' '):
+        #     chunk = ' ' + chunk
 
         # Вставляем чанк
         cursor = self.textCursor()
@@ -622,6 +624,14 @@ class ChatWindow(QMainWindow):
 
         event.accept()
 
+    def eventFilter(self, obj, event):
+        """Обработка событий для поля ввода"""
+        if obj == self.message_input and event.type() == event.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Return and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                self.send_message()
+                return True
+        return super().eventFilter(obj, event)
+
     def _initialize_interface(self, main_layout):
         """Инициализация интерфейса"""
         try:
@@ -750,6 +760,14 @@ class ChatWindow(QMainWindow):
 
             left_layout.addStretch()
 
+            try:
+                # --- Настройка автоматического запуска модели ---
+                self.auto_start_model_checkbox = QCheckBox("Автоматически запускать модель")
+                self.auto_start_model_checkbox.setChecked(True)  # По умолчанию включено
+                left_layout.addWidget(self.auto_start_model_checkbox)
+            except Exception as e:
+                logging.error(f"Ошибка при создании QCheckBox: {str(e)}")
+
             left_panel.setMinimumWidth(200)
             left_panel.setMaximumWidth(300)
             splitter.addWidget(left_panel)
@@ -838,7 +856,7 @@ class ChatWindow(QMainWindow):
             self.update_timer.start(5000)  # Каждые 5 секунд
 
             # Первое обновление списка моделей
-            self.update_models()
+            # self.update_models()
 
         except Exception as ui_error:
             logging.error(f"Ошибка создания интерфейса: {str(ui_error)}")
@@ -922,20 +940,21 @@ class ChatWindow(QMainWindow):
                             self.stop_model_btn.setEnabled(False)
                         logging.info(f"Восстановлена ранее выбранная модель: {current}")
                 elif self.model_combo.count() > 0:
-                    self.model_combo.setCurrentIndex(0)
-                    self.current_model = self.model_combo.currentText().split(" (")[0]
-                    logging.info(
-                        f"Автоматически выбрана первая доступная модель: {self.current_model}")
-                    # Проверяем состояние первой модели
-                    if self.api.is_model_running(self.current_model):
-                        self.update_model_status(f"Модель активна: {self.current_model}")
-                        self.start_model_btn.setEnabled(False)
-                        self.stop_model_btn.setEnabled(True)
-                        self.model_combo.setEnabled(False)
-                    else:
-                        self.update_model_status(f"Модель выбрана: {self.current_model}")
-                        self.start_model_btn.setEnabled(True)
-                        self.stop_model_btn.setEnabled(False)
+                    # self.model_combo.setCurrentIndex(0)
+                    # self.current_model = self.model_combo.currentText().split(" (")[0]
+                    # logging.info(
+                    #     f"Автоматически выбрана первая доступная модель: {self.current_model}")
+                    # # Проверяем состояние первой модели
+                    # if self.api.is_model_running(self.current_model):
+                    #     self.update_model_status(f"Модель активна: {self.current_model}")
+                    #     self.start_model_btn.setEnabled(False)
+                    #     self.stop_model_btn.setEnabled(True)
+                    #     self.model_combo.setEnabled(False)
+                    # else:
+                    #     self.update_model_status(f"Модель выбрана: {self.current_model}")
+                    #     self.start_model_btn.setEnabled(True)
+                    #     self.stop_model_btn.setEnabled(False)
+                    pass
 
             finally:
                 self.model_combo.blockSignals(False)
@@ -980,10 +999,10 @@ class ChatWindow(QMainWindow):
         """Проверка доступности модели"""
         if not self.current_model:
             # Деактивируем кнопку отправки
-            send_button = self.findChild(QPushButton, "send_button")
-            if send_button:
-                send_button.setEnabled(False)
-                QApplication.processEvents()
+            # send_button = self.findChild(QPushButton, "send_button")
+            # if send_button:
+            #     send_button.setEnabled(False)
+            QApplication.processEvents()
             return False
 
         try:
@@ -1339,16 +1358,3 @@ def _show_jan_settings(self):
         if reply == QMessageBox.StandardButton.Yes:
             # Очищаем историю чата
             self.chat_history.clear()
-
-    def eventFilter(self, obj, event):
-        """Обработка событий для поля ввода"""
-        if obj is self.message_input and event.type() == event.Type.KeyPress:
-            if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
-                if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
-                    # Shift+Enter - новая строка
-                    return False
-                else:
-                    # Enter - отправка сообщения
-                    self.send_message()
-                    return True
-        return super().eventFilter(obj, event)

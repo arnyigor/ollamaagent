@@ -120,8 +120,8 @@ class OllamaAPI:
 
             # Базовые параметры
             data = {
-                "model": model,
-                "prompt": prompt,
+                "model": str(model).encode('utf-8').decode('utf-8'),
+                "prompt": str(prompt).encode('utf-8').decode('utf-8'),
                 "stream": False,
                 "options": {
                     "temperature": kwargs.get('temperature', 0.7),
@@ -169,7 +169,7 @@ class OllamaAPI:
                 "Generation completed - Time: %.2fs, Memory: %.2fMB, Tokens: %d",
                 generation_time,
                 memory_used,
-                len(response.json().get('response', '').split())
+                len(re.findall(r'\w+', response.json().get('response', '')))
             )
 
             return response.json()['response']

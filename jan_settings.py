@@ -170,6 +170,11 @@ class JanSettingsWindow(QDialog):
 
         self.layout.addLayout(model_layout)
 
+        # --- Настройка автоматического запуска модели ---
+        self.auto_start_model_checkbox = QCheckBox("Автоматически запускать модель")
+        self.auto_start_model_checkbox.setChecked(True)  # По умолчанию включено
+        self.layout.addWidget(self.auto_start_model_checkbox)
+
         # --- Текстовое поле для ввода сообщения ---
         self.message_label = QLabel("Сообщение:")
         logger.debug("Создан QLabel 'Сообщение:'")
@@ -253,6 +258,7 @@ class JanSettingsWindow(QDialog):
     def send_message(self):
         """Отправляет сообщение на сервер."""
         message = self.message_input.toPlainText()
+        message = str(message).encode('utf-8').decode('utf-8')
         if message:
             logger.info(f"Отправка сообщения из GUI: {message}")
             self.show_progress()
@@ -263,6 +269,7 @@ class JanSettingsWindow(QDialog):
 
     def set_server_status(self, is_ready):
         """Обновляет статус сервера и включает/отключает ввод."""
+        logger.info(f"set_server_status: is_ready = {is_ready}")
         if is_ready:
             self.status_label.setText("Статус: Подключен")
             logger.debug("Установлен текст статуса: 'Статус: Подключен'")
@@ -279,7 +286,7 @@ class JanSettingsWindow(QDialog):
 
     def populate_model_combo(self, models):
         """Заполняет комбобокс списком моделей."""
-        logger.info(f"Заполнение комбобокса моделями: {models}")
+        logger.info(f"populate_model_combo: models = {models}")
         self.model_combo.clear()
         for model in models:
             self.model_combo.addItem(model)  # Добавляем модели в комбобокс

@@ -3,7 +3,6 @@ import sys
 from PyQt6.QtWidgets import QApplication
 
 from chat_window import ChatWindow
-from ollama_settings import OllamaSettings
 
 # Настройка логирования
 logging.basicConfig(

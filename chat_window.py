@@ -466,22 +466,25 @@ class MessageThread(QThread):
     finished = pyqtSignal()  # Сигнал о завершении
     error = pyqtSignal(str)  # Сигнал об ошибке
 
-    def __init__(self, api, model, prompt, system, **kwargs):
+    def __init__(self, api, model, messages, **kwargs):
         super().__init__()
         self.api = api
         self.model = model
-        self.prompt = prompt
-        self.system = system
-        self.kwargs = kwargs  # Сохраняем все дополнительные параметры
+        self.messages = messages
+        self.kwargs = kwargs
 
     def run(self):
         try:
-            # Генерируем ответ с обработкой чанков
+            # Формируем историю сообщений для отправки в API
+            api_messages = self.messages
+            #for message in self.messages:
+            #    api_messages.append({"role": message["role"], "content": str(message["content"])})
+
+            # Отправляем запрос в API
             for chunk in self.api.generate_stream(
                     model=self.model,
-                    prompt=self.prompt,
-                    system=self.system,
-                    **self.kwargs  # Передаем все параметры
+                    messages=api_messages,
+                    **self.kwargs
             ):
                 if chunk:
                     self.message_chunk.emit(chunk)
@@ -527,6 +530,8 @@ class ChatWindow(QMainWindow):
 
     def __init__(self):
         self.message_thread = None
+        self.messages = []
+        self.current_response = ""
         self.total_tokens = None
         self.generation_start_time = None
         try:
@@ -1099,11 +1104,11 @@ class ChatWindow(QMainWindow):
             logging.warning("Попытка отправки сообщения без выбранной модели")
             QMessageBox.warning(self, "Ошибка", "Пожалуйста, выберите модель")
             return
-        text = self.message_input.toPlainText().strip()
-        if not text:
+        messages = self.message_input.toPlainText().strip()
+        if not messages:
             logging.info("Сообщение пустое, не отправляем")
             return
-        logging.info(f"Отправка сообщения: {text}")
+        logging.info(f"Отправка сообщения: {messages}")
         logging.info(f"Отправка сообщения модели {self.current_model}")
         # Блокируем кнопку отправки и поле ввода
         self.message_input.setReadOnly(True)
@@ -1111,7 +1116,7 @@ class ChatWindow(QMainWindow):
         if send_button:
             send_button.setEnabled(False)
         # Добавляем сообщение пользователя
-        self.chat_history.add_message(text, True)
+        self.chat_history.add_message(messages, True)
         self.message_input.clear()
         # Обновляем статус
         self.update_model_status(f"Генерация ответа...")
@@ -1125,10 +1130,10 @@ class ChatWindow(QMainWindow):
             self.message_thread = MessageThread(
                 self.api,
                 self.current_model,
-                text,
-                params.pop('system'),  # Извлекаем системный промпт
-                **params  # Передаем все остальные параметры
+                self.messages,
+                **params
             )
+            self.messages.append({"role": "user", "content": messages})
             # Подключаем сигналы
             self.message_thread.message_chunk.connect(self.on_message_chunk)
             self.message_thread.finished.connect(self.on_message_complete)
@@ -1136,10 +1141,13 @@ class ChatWindow(QMainWindow):
             # Запускаем поток
             self.message_thread.start()
         except Exception as e:
-            logging.error(f"Ошибка при отправке сообщения: {e}")
-            self.on_message_error(str(e))
+            import traceback
+            error_msg = f"Ошибка при отправке сообщения: {e}\n{traceback.format_exc()}"
+            logging.error(error_msg)
+            self.on_message_error(error_msg)
 
     def on_message_chunk(self, chunk: str):
+        self.current_response += chunk
         """Обработка части ответа от модели"""
         self.chat_history.add_message_chunk(chunk)
         self.total_tokens += 1  # Увеличиваем счетчик токенов
@@ -1162,11 +1170,13 @@ class ChatWindow(QMainWindow):
         # Для простоты: перезаписываем последнее сообщение
         # ВАЖНО: эта часть требует доработки для корректного обновления
         # (например, хранить список сообщений и обновлять последний элемент)
-        # Временное решение:
-        # Добавляем пустую строку и информацию о производительности
-        self.chat_history.add_message("", False, performance_info)
+        # Добавляем сообщение ассистента в историю
+        self.chat_history.add_message(self.current_response, False, self.message_thread.performance_info)
+        self.messages.append({"role": "assistant", "content": self.current_response})
+        self.current_response = ""
 
         # Разблокируем интерфейс
+        #self.chat_history.add_message("", False, self.message_thread.performance_info)
         self.message_input.setReadOnly(False)
         send_button = self.findChild(QPushButton, "send_button")
         if send_button:
@@ -1180,9 +1190,12 @@ class ChatWindow(QMainWindow):
 
     def on_message_error(self, error_msg: str):
         """Обработка ошибки при генерации ответа"""
-        logging.error(f"Ошибка генерации ответа: {error_msg}")
+        import traceback
+        trace = traceback.format_exc()
+        print(f"Ошибка генерации ответа: {error_msg}\n{trace}")
+        logging.error(f"Ошибка генерации ответа: {error_msg}\n{trace}")
         self.update_model_status(f"Ошибка генерации", True)
-        self.chat_history.add_message(f"❌ Ошибка: {error_msg}", False)
+        self.chat_history.add_message(f"❌ Ошибка: {error_msg}\n{trace}", False)
 
         # Разблокируем интерфейс
         self.message_input.setReadOnly(False)
@@ -1345,6 +1358,7 @@ def _show_jan_settings(self):
     except Exception as e:
         logging.error(f"Ошибка при открытии настроек Jan: {str(e)}")
         QMessageBox.warning(self, "Ошибка", f"Не удалось открыть настройки: {str(e)}")
+
     def clear_chat(self):
         """Очистка истории чата"""
         reply = QMessageBox.question(

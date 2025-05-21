@@ -2,6 +2,7 @@ import atexit
 import json
 import logging
 import time
+import traceback
 from typing import List, Dict, Tuple
 
 import psutil
@@ -77,10 +78,10 @@ class OllamaAPI:
 
             # Отправляем тестовый запрос для запуска модели
             response = requests.post(
-                f"{self.host}/api/generate",
+                f"{self.host}/api/chat",
                 json={
                     "model": model,
-                    "prompt": "test",
+                    "messages": [{"role": "user", "content": "test"}],
                     "stream": False
                 },
                 timeout=30
@@ -108,80 +109,7 @@ class OllamaAPI:
         except Exception as e:
             raise Exception(f"Ошибка остановки модели: {str(e)}")
 
-    def generate(self, model: str, prompt: str, system: str = "", **kwargs) -> str:
-        """Генерация ответа от модели с расширенными параметрами"""
-        try:
-            start_time = time.time()
-            self.logger.info(f"Starting generation with model {model}")
-
-            # Мониторинг ресурсов
-            process = psutil.Process()
-            initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-
-            # Базовые параметры
-            data = {
-                "model": str(model).encode('utf-8').decode('utf-8'),
-                "prompt": str(prompt).encode('utf-8').decode('utf-8'),
-                "stream": False,
-                "options": {
-                    "temperature": kwargs.get('temperature', 0.7),
-                    "num_predict": kwargs.get('max_tokens', 2048),
-                    "top_k": kwargs.get('top_k', 40),
-                    "top_p": kwargs.get('top_p', 0.9),
-                    "repeat_penalty": kwargs.get('repeat_penalty', 1.1),
-                    "presence_penalty": kwargs.get('presence_penalty', 0.0),
-                    "frequency_penalty": kwargs.get('frequency_penalty', 0.0),
-                    "tfs_z": kwargs.get('tfs_z', 1.0),
-                    "mirostat": kwargs.get('mirostat', 0),
-                    "mirostat_tau": kwargs.get('mirostat_tau', 5.0),
-                    "mirostat_eta": kwargs.get('mirostat_eta', 0.1),
-                }
-            }
-
-            # Добавляем системный промпт если есть
-            if system:
-                data["system"] = system
-
-            # Добавляем seed если указан
-            if 'seed' in kwargs:
-                data["options"]["seed"] = kwargs['seed']
-
-            # Добавляем stop последовательности если указаны
-            if 'stop' in kwargs:
-                data["options"]["stop"] = kwargs['stop']
-
-            # Отправляем запрос
-            response = requests.post(
-                f"{self.host}/api/generate",
-                json=data,
-                timeout=30
-            )
-            response.raise_for_status()
-
-            # Собираем метрики
-            end_time = time.time()
-            final_memory = process.memory_info().rss / 1024 / 1024
-            generation_time = end_time - start_time
-            memory_used = final_memory - initial_memory
-
-            # Логируем метрики
-            self.logger.info(
-                "Generation completed - Time: %.2fs, Memory: %.2fMB, Tokens: %d",
-                generation_time,
-                memory_used,
-                len(re.findall(r'\w+', response.json().get('response', '')))
-            )
-
-            return response.json()['response']
-
-        except requests.exceptions.RequestException as e:
-            self.logger.error("API Error: %s", str(e))
-            raise Exception(f"Ошибка API: {str(e)}")
-        except Exception as e:
-            self.logger.error("Generation Error: %s", str(e))
-            raise Exception(f"Ошибка генерации: {str(e)}")
-
-    def generate_stream(self, model: str, prompt: str, system: str = "", **kwargs):
+    def generate_stream(self, model: str, messages: List[Dict[str, str]], **kwargs):
         """Потоковая генерация ответа от модели с расширенными параметрами"""
         try:
             start_time = time.time()
@@ -194,7 +122,7 @@ class OllamaAPI:
             # Базовые параметры
             data = {
                 "model": model,
-                "prompt": prompt,
+                "messages": messages,
                 "stream": True,
                 "options": {
                     "temperature": kwargs.get('temperature', 0.7),
@@ -211,8 +139,8 @@ class OllamaAPI:
                 }
             }
 
-            if system:
-                data["system"] = system
+            if kwargs['system']:
+                data["system"] = kwargs['system']
 
             if 'seed' in kwargs:
                 data["options"]["seed"] = kwargs['seed']
@@ -223,8 +151,10 @@ class OllamaAPI:
             total_tokens = 0
             chunk_times = []
 
+            logging.info(f"Request data: {data}")
+
             with requests.post(
-                    f"{self.host}/api/generate",
+                    f"{self.host}/api/chat",
                     json=data,
                     stream=True,
                     timeout=30
@@ -235,8 +165,15 @@ class OllamaAPI:
                 for line in response.iter_lines():
                     if line:
                         try:
+                            self.logger.debug(f"Raw response line: {line}")
                             chunk_data = json.loads(line)
-                            if 'response' in chunk_data:
+                            self.logger.debug(f"Parsed chunk data: {chunk_data}")
+                            
+                            if not isinstance(chunk_data, dict):
+                                self.logger.error(f"Unexpected response format: {type(chunk_data)}")
+                                continue
+
+                            if isinstance(chunk_data, dict) and 'response' in chunk_data:
                                 # Считаем токены и время чанка
                                 chunk_tokens = len(chunk_data['response'].split())
                                 total_tokens += chunk_tokens
@@ -245,9 +182,20 @@ class OllamaAPI:
                                 chunk_start = time.time()
 
                                 yield chunk_data['response']
+                            elif isinstance(chunk_data, dict) and 'message' in chunk_data and 'content' in chunk_data['message']:
+                                yield chunk_data['message']['content']
+                            else:
+                                self.logger.warning(f"Missing 'response' or 'message.content' in chunk: {chunk_data}")
 
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as e:
+                            self.logger.error(f"JSON decode error: {e}\nLine: {line}")
                             continue
+                        except Exception as e:
+                            self.logger.error(f"Unexpected error: {str(e)}\n{traceback.format_exc()}")
+                            raise
+
+            if chunk_data and 'response' in chunk_data:
+                logging.info(f"Response data: {chunk_data['response']}")
 
             # Собираем финальные метрики
             end_time = time.time()
@@ -266,10 +214,11 @@ class OllamaAPI:
             )
 
         except requests.exceptions.RequestException as e:
-            self.logger.error("Streaming API Error: %s", str(e))
+            self.logger.error("Streaming API Error: %s", str(e), stack_info=True)
             raise Exception(f"Ошибка API: {str(e)}")
         except Exception as e:
-            self.logger.error("Streaming Generation Error: %s", str(e))
+            print(f"Ошибка генерации 1:{e}\n{traceback.format_exc()}")
+            self.logger.error("Streaming Generation Error: %s", str(e), stack_info=True)
             raise Exception(f"Ошибка генерации: {str(e)}")
 
     def stop_all_models(self):

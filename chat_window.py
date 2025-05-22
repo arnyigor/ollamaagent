@@ -101,61 +101,50 @@ class ChatHistory(QTextEdit):
         """
         Добавление обычного сообщения (от пользователя или ассистента)
         """
-        if not text.strip() and not performance_info:
-            logging.info(
-                f"Добавление обычного сообщения performance_info:{performance_info} text: {text}")
+        # Этот метод теперь используется только для сообщений пользователя
+        if not is_user:
             return
 
-        sender = "Вы" if is_user else "Ассистент"
-        sender = str(sender).encode('utf-8').decode('utf-8')
-        color = "#2962FF" if is_user else "#00838F"
-        bg_color = "#F5F5F5" if is_user else "#FFFFFF"
+        if not text.strip():
+            return
 
-        # Основной контейнер сообщения
+        sender = "Вы"
+        color = "#2962FF"
+        bg_color = "#F5F5F5"
+
         message_html = (
-            f'<div style="margin: {"10px" if is_user else "25px"} 0; '
-            f'padding: 12px; background-color: {bg_color}; '
+            f'<div style="margin: 10px 0; padding: 12px; background-color: {bg_color}; '
             f'border-radius: 8px; border: 1px solid #E0E0E0;">'
+            f'<div style="font-weight: bold; color: {color}; margin-bottom: 8px;"><br>{sender}</div>'
+            f'<div style="white-space: pre-wrap; margin-left: 10px;">{text.strip()}<br></div>'
+            f'</div>'
         )
-
-        # Заголовок сообщения (имя отправителя)
-        if not performance_info:
-            message_html += (
-                f'<div style="font-weight: bold; color: {color}; '
-                f'margin-bottom: 8px;"><br>{sender}</div>'
-            )
-        else:
-            message_html += (
-                f'<div style="font-weight: bold; color: {color}; '
-                f'margin-bottom: 8px;"><br></div>'
-            )
-
-        # Текст сообщения
-        if text.strip():
-            text = str(text).encode('utf-8').decode('utf-8')
-            message_html += (
-                f'<div style="white-space: pre-wrap; margin-left: 10px;">'
-                f'{text.strip()}<br></div>'
-            )
-
-        # Информация о производительности
-        if not is_user and performance_info:
-            tokens_per_sec = performance_info.get("tokens", 0) / max(
-                performance_info.get("total_time", 1), 0.1
-            )
-            message_html += (
-                f'<div style="margin-top: 10px; padding: 5px; '
-                f'background-color: #FAFAFA; border-top: 1px solid #E0E0E0; '
-                f'font-size: 12px; color: #757575;">'
-                f'⚡ Время: {performance_info.get("total_time", 0):.2f}с | '
-                f'🔄 Токенов: {performance_info.get("tokens", 0)} '
-                f'({tokens_per_sec:.1f} т/с) | '
-                f'⚙️ Модель: {performance_info.get("model", "неизвестно")}'
-                f'</div>'
-            )
-
-        message_html += '</div>'
         self._insert_message_safely(message_html)
+
+    def add_performance_info(self, performance_info: dict):
+        """
+        Добавление информации о производительности отдельно от сообщения
+        """
+        if not performance_info:
+            return
+
+        tokens_per_sec = performance_info.get("tokens", 0) / max(
+            performance_info.get("total_time", 1), 0.1
+        )
+        info_html = (
+            f'<div style="margin-top: 15px; margin-left: 25px; padding: 8px; background-color: #FFFFFF; '
+            f'border-radius: 6px; border: 1px solid #E0E0E0; font-size: 12px; color: #757575;">'
+            f'⚡ Время: {performance_info.get("total_time", 0):.2f}с | '
+            f'🔄 Токенов: {performance_info.get("tokens", 0)} '
+            f'({tokens_per_sec:.1f} т/с) | '
+            f'⚙️ Модель: {performance_info.get("model", "неизвестно")}'
+            f'</div>'
+        )
+        # Добавляем перевод строки перед информацией
+        cursor = self.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.insertText('\n')
+        self._insert_message_safely(info_html)
         # log_prefix = "Пользователь" if is_user else "Ассистент"
         # logging.info(f"{log_prefix} message_html: {message_html}")
 
@@ -163,30 +152,25 @@ class ChatHistory(QTextEdit):
         """
         Добавление части сообщения в режиме потоковой генерации
         """
-        # logging.info(
-        #     f"Добавление части сообщения: {chunk}, is_system_message: {self.is_system_message}")
         if not chunk or self.is_system_message:
             return
 
         # Инициализация нового сообщения, если это первый чанк
         if self.response_start_pos is None:
             self.response_start_pos = self.textCursor().position()
-            self.current_message_html = (
-                '<div style="margin: 25px 0; padding: 12px; '
-                'background-color: #FFFFFF; border-radius: 8px; '
-                'border: 1px solid #E0E0E0;">'
-                '<div style="white-space: pre-wrap; margin-left: 10px;">'
-            )
-            self._insert_message_safely(self.current_message_html)
+            self.current_message_text = ""
 
-        # Добавляем пробел перед чанком, если нужно
-        # if chunk and not chunk.startswith(' ') and not self.current_message_html.endswith(' '):
-        #     chunk = ' ' + chunk
-
-        # Вставляем чанк
+        # Вставляем чанк как есть, без добавления пробелов
         cursor = self.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
+        
+        # Обрабатываем пустой чанк как сигнал завершения
+        if chunk == '':
+            self.finish_chunked_message()
+            return
+            
         cursor.insertText(chunk)
+        self.current_message_text += chunk
         self._scroll_to_bottom()
 
     def _insert_message_safely(self, html: str):
@@ -211,12 +195,13 @@ class ChatHistory(QTextEdit):
         Завершение потокового сообщения
         """
         if self.response_start_pos is not None:
-            self.current_message_html += '</div></div>'
+            # Добавляем перевод строки после сообщения
             cursor = self.textCursor()
             cursor.movePosition(cursor.MoveOperation.End)
-            cursor.insertHtml('</div></div>')
+            cursor.insertText('\n')
+            self._scroll_to_bottom()
             self.response_start_pos = None
-            self.current_message_html = ""
+            self.current_message_text = ""
 
 
 class ModelSettings(QFrame):
@@ -465,6 +450,7 @@ class MessageThread(QThread):
     message_chunk = pyqtSignal(str)  # Сигнал для частей ответа
     finished = pyqtSignal()  # Сигнал о завершении
     error = pyqtSignal(str)  # Сигнал об ошибке
+    performance_info = pyqtSignal(dict)  # Сигнал с информацией о производительности
 
     def __init__(self, api, model, messages, **kwargs):
         super().__init__()
@@ -481,13 +467,26 @@ class MessageThread(QThread):
             #    api_messages.append({"role": message["role"], "content": str(message["content"])})
 
             # Отправляем запрос в API
+            full_response = []
+            start_time = time.time()
             for chunk in self.api.generate_stream(
                     model=self.model,
                     messages=api_messages,
                     **self.kwargs
             ):
                 if chunk:
+                    full_response.append(chunk)
                     self.message_chunk.emit(chunk)
+            
+            # Добавляем информацию о производительности
+            if full_response:
+                performance = {
+                    "total_time": time.time() - start_time,
+                    "tokens": sum(len(chunk.split()) for chunk in full_response),
+                    "model": self.model
+                }
+                self.performance_info.emit(performance)
+            
             self.finished.emit()
         except Exception as e:
             self.error.emit(str(e))
@@ -1138,6 +1137,8 @@ class ChatWindow(QMainWindow):
             self.message_thread.message_chunk.connect(self.on_message_chunk)
             self.message_thread.finished.connect(self.on_message_complete)
             self.message_thread.error.connect(self.on_message_error)
+            self.message_thread.performance_info.connect(
+                lambda perf: self.chat_history.add_performance_info(perf))
             # Запускаем поток
             self.message_thread.start()
         except Exception as e:

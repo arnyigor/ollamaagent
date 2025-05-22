@@ -20,11 +20,11 @@ class OllamaAPI:
 
         # Добавляем обработчик для файла
         fh = logging.FileHandler('ollama_api.log')
-        fh.setLevel(logging.INFO)
+        fh.setLevel(logging.DEBUG)
 
         # Добавляем обработчик для консоли
         ch = logging.StreamHandler()
-        ch.setLevel(logging.INFO)
+        ch.setLevel(logging.DEBUG)
 
         # Создаем форматтер
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -151,7 +151,7 @@ class OllamaAPI:
             total_tokens = 0
             chunk_times = []
 
-            logging.info(f"Request data: {data}")
+            logging.debug(f"Request data: {data}")
 
             with requests.post(
                     f"{self.host}/api/chat",
@@ -195,7 +195,7 @@ class OllamaAPI:
                             raise
 
             if chunk_data and 'response' in chunk_data:
-                logging.info(f"Response data: {chunk_data['response']}")
+                logging.debug(f"Response data: {chunk_data['response']}")
 
             # Собираем финальные метрики
             end_time = time.time()

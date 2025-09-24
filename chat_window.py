@@ -10,12 +10,13 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QComboBox, QLabel,
     QSplitter, QFrame, QScrollArea, QSpinBox, QDoubleSpinBox,
-    QMessageBox, QGroupBox, QFormLayout, QCheckBox
+    QMessageBox, QGroupBox, QFormLayout, QCheckBox, QDialog
 )
 
 from jan_settings import JanSettingsWindow
 from ollama_api import OllamaAPI
 from ollama_settings import OllamaSettings
+from widgets.model_settings import ModelSettings
 
 # Настройка логирования
 logging.basicConfig(
@@ -130,6 +131,42 @@ class ChatHistory(QTextEdit):
         # log_prefix = "Пользователь" if is_user else "Ассистент"
         # logging.info(f"{log_prefix} message_html: {message_html}")
 
+    def add_extended_performance_info(self, stats: dict):
+        """
+        Добавление расширенной информации о производительности
+        """
+        if not stats:
+            return
+
+        # Рассчитываем скорость генерации
+        output_tokens = stats.get("output_tokens", 0)
+        total_time = stats.get("total_time", 1)
+        tokens_per_sec = output_tokens / max(total_time, 0.1)
+
+        # Рассчитываем время до первого токена
+        ttft = stats.get("time_to_first_token", 0)
+
+        info_html = (
+            f'<div style="margin-top: 15px; margin-left: 25px; padding: 10px; background-color: #E8F5E8; '
+            f'border-radius: 8px; border: 1px solid #4CAF50; font-size: 12px; color: #2E7D32;">'
+            f'📊 <b>Расширенная статистика:</b><br>'
+            f'⏱️ Общее время: {total_time:.2f}с | '
+            f'⚡ TTFT: {ttft:.3f}с | '
+            f'📥 Входные токены: {stats.get("input_tokens", 0)} | '
+            f'📤 Выходные токены: {output_tokens} | '
+            f'🔄 Всего токенов: {stats.get("total_tokens", 0)} | '
+            f'⚡ Скорость: {tokens_per_sec:.1f} т/с | '
+            f'🧠 Память: {stats.get("memory_used", 0):.1f}MB | '
+            f'⚙️ Модель: {stats.get("model", "неизвестно")}'
+            f'</div>'
+        )
+
+        # Добавляем перевод строки перед информацией
+        cursor = self.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.insertText('\n')
+        self._insert_message_safely(info_html)
+
     def add_message_chunk(self, chunk: str):
         """
         Добавление части сообщения в режиме потоковой генерации
@@ -186,175 +223,6 @@ class ChatHistory(QTextEdit):
             self.current_message_text = ""
 
 
-class ModelSettings(QFrame):
-    """Панель настроек модели"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-
-        # Создаем скролл для настроек
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        # Создаем контейнер для настроек
-        container = QWidget()
-        settings_layout = QVBoxLayout(container)
-        settings_layout.setSpacing(10)
-
-        # Заголовок
-        header = QLabel("Настройки модели")
-        header.setStyleSheet("font-weight: bold; font-size: 14px;")
-        settings_layout.addWidget(header)
-
-        # Базовые настройки
-        basic_group = QGroupBox("Базовые настройки")
-        basic_layout = QFormLayout()
-
-        # Температура
-        self.temp_spin = QDoubleSpinBox()
-        self.temp_spin.setRange(0.0, 2.0)
-        self.temp_spin.setSingleStep(0.1)
-        self.temp_spin.setValue(0.7)
-        self.temp_spin.setToolTip(
-            "Контролирует случайность генерации (0.0 - детерминированная, 2.0 - максимально случайная)")
-        basic_layout.addRow("Температура:", self.temp_spin)
-
-        # Максимальное количество токенов
-        self.tokens_spin = QSpinBox()
-        self.tokens_spin.setRange(1, 4096)
-        self.tokens_spin.setValue(2048)
-        self.tokens_spin.setToolTip("Максимальное количество токенов в ответе")
-        basic_layout.addRow("Макс. токенов:", self.tokens_spin)
-
-        basic_group.setLayout(basic_layout)
-        settings_layout.addWidget(basic_group)
-
-        # Продвинутые настройки
-        advanced_group = QGroupBox("Продвинутые настройки")
-        advanced_layout = QFormLayout()
-
-        # Top-K
-        self.top_k_spin = QSpinBox()
-        self.top_k_spin.setRange(1, 100)
-        self.top_k_spin.setValue(40)
-        self.top_k_spin.setToolTip(
-            "Количество токенов для выборки (больше значение - более разнообразные ответы)")
-        advanced_layout.addRow("Top-K:", self.top_k_spin)
-
-        # Top-P
-        self.top_p_spin = QDoubleSpinBox()
-        self.top_p_spin.setRange(0.0, 1.0)
-        self.top_p_spin.setSingleStep(0.05)
-        self.top_p_spin.setValue(0.9)
-        self.top_p_spin.setToolTip(
-            "Порог вероятности для выборки токенов (меньше значение - более консервативные ответы)")
-        advanced_layout.addRow("Top-P:", self.top_p_spin)
-
-        # Repeat Penalty
-        self.repeat_penalty_spin = QDoubleSpinBox()
-        self.repeat_penalty_spin.setRange(1.0, 2.0)
-        self.repeat_penalty_spin.setSingleStep(0.1)
-        self.repeat_penalty_spin.setValue(1.1)
-        self.repeat_penalty_spin.setToolTip(
-            "Штраф за повторение токенов (больше значение - меньше повторений)")
-        advanced_layout.addRow("Repeat Penalty:", self.repeat_penalty_spin)
-
-        # Presence Penalty
-        self.presence_penalty_spin = QDoubleSpinBox()
-        self.presence_penalty_spin.setRange(-2.0, 2.0)
-        self.presence_penalty_spin.setSingleStep(0.1)
-        self.presence_penalty_spin.setValue(0.0)
-        self.presence_penalty_spin.setToolTip("Штраф за использование существующих токенов")
-        advanced_layout.addRow("Presence Penalty:", self.presence_penalty_spin)
-
-        # Frequency Penalty
-        self.frequency_penalty_spin = QDoubleSpinBox()
-        self.frequency_penalty_spin.setRange(-2.0, 2.0)
-        self.frequency_penalty_spin.setSingleStep(0.1)
-        self.frequency_penalty_spin.setValue(0.0)
-        self.frequency_penalty_spin.setToolTip("Штраф за частое использование токенов")
-        advanced_layout.addRow("Frequency Penalty:", self.frequency_penalty_spin)
-
-        # TFS-Z
-        self.tfs_z_spin = QDoubleSpinBox()
-        self.tfs_z_spin.setRange(0.0, 2.0)
-        self.tfs_z_spin.setSingleStep(0.1)
-        self.tfs_z_spin.setValue(1.0)
-        self.tfs_z_spin.setToolTip("Параметр хвостового свободного сэмплирования")
-        advanced_layout.addRow("TFS-Z:", self.tfs_z_spin)
-
-        advanced_group.setLayout(advanced_layout)
-        settings_layout.addWidget(advanced_group)
-
-        # Mirostat настройки
-        mirostat_group = QGroupBox("Mirostat настройки")
-        mirostat_layout = QFormLayout()
-
-        # Mirostat mode
-        self.mirostat_spin = QSpinBox()
-        self.mirostat_spin.setRange(0, 2)
-        self.mirostat_spin.setValue(0)
-        self.mirostat_spin.setToolTip("Режим Mirostat (0 - выкл, 1 - v1, 2 - v2)")
-        mirostat_layout.addRow("Mirostat режим:", self.mirostat_spin)
-
-        # Mirostat tau
-        self.mirostat_tau_spin = QDoubleSpinBox()
-        self.mirostat_tau_spin.setRange(0.0, 10.0)
-        self.mirostat_tau_spin.setSingleStep(0.1)
-        self.mirostat_tau_spin.setValue(5.0)
-        self.mirostat_tau_spin.setToolTip("Целевая энтропия Mirostat")
-        mirostat_layout.addRow("Mirostat tau:", self.mirostat_tau_spin)
-
-        # Mirostat eta
-        self.mirostat_eta_spin = QDoubleSpinBox()
-        self.mirostat_eta_spin.setRange(0.0, 1.0)
-        self.mirostat_eta_spin.setSingleStep(0.01)
-        self.mirostat_eta_spin.setValue(0.1)
-        self.mirostat_eta_spin.setToolTip("Скорость обучения Mirostat")
-        mirostat_layout.addRow("Mirostat eta:", self.mirostat_eta_spin)
-
-        mirostat_group.setLayout(mirostat_layout)
-        settings_layout.addWidget(mirostat_group)
-
-        # Системный промпт
-        system_group = QGroupBox("Системный промпт")
-        system_layout = QVBoxLayout()
-        self.system_prompt = QTextEdit()
-        self.system_prompt.setPlaceholderText("Введите системный промпт...")
-        self.system_prompt.setMaximumHeight(100)
-        system_layout.addWidget(self.system_prompt)
-        system_group.setLayout(system_layout)
-        settings_layout.addWidget(system_group)
-
-        # Добавляем растягивающийся элемент в конец
-        settings_layout.addStretch()
-
-        # Устанавливаем контейнер в скролл
-        scroll.setWidget(container)
-        layout.addWidget(scroll)
-
-        # Стилизация
-        self.setStyleSheet(MODEL_SETTINGS_STYLE)
-
-    def get_parameters(self) -> dict:
-        """Получение всех параметров модели"""
-        return {
-            'temperature': self.temp_spin.value(),
-            'max_tokens': self.tokens_spin.value(),
-            'top_k': self.top_k_spin.value(),
-            'top_p': self.top_p_spin.value(),
-            'repeat_penalty': self.repeat_penalty_spin.value(),
-            'presence_penalty': self.presence_penalty_spin.value(),
-            'frequency_penalty': self.frequency_penalty_spin.value(),
-            'tfs_z': self.tfs_z_spin.value(),
-            'mirostat': self.mirostat_spin.value(),
-            'mirostat_tau': self.mirostat_tau_spin.value(),
-            'mirostat_eta': self.mirostat_eta_spin.value(),
-            'system': self.system_prompt.toPlainText().strip()
-        }
 
 
 
@@ -365,8 +233,15 @@ class ChatWindow(QMainWindow):
         self.message_thread = None
         self.messages = []
         self.current_response = ""
-        self.total_tokens = None
+        self.total_tokens = 0
         self.generation_start_time = None
+        # Инициализируем статистику сессии
+        self.session_stats = {
+            'total_input_tokens': 0,
+            'total_output_tokens': 0,
+            'total_generations': 0,
+            'total_time': 0.0
+        }
         try:
             super().__init__(None)  # Явно указываем отсутствие родителя
 
@@ -432,14 +307,15 @@ class ChatWindow(QMainWindow):
             logging.error(f"Ошибка инициализации окна: {str(e)}", exc_info=True)
             raise
 
-    def closeEvent(self, event):
+    def closeEvent(self, a0):
         """Обработка события закрытия окна"""
-        if not hasattr(self, 'initialization_complete') or not self.initialization_complete:
-            logging.warning("Попытка закрыть окно во время инициализации")
-            event.ignore()
-            return
-
         try:
+            if not hasattr(self, 'initialization_complete') or not self.initialization_complete:
+                logging.warning("Попытка закрыть окно во время инициализации")
+                if hasattr(a0, 'ignore'):
+                    a0.ignore()
+                return
+
             # Останавливаем все запущенные модели
             logging.info("Остановка всех моделей перед закрытием...")
             self.api.stop_all_models()
@@ -449,26 +325,29 @@ class ChatWindow(QMainWindow):
                 self.update_timer.stop()
 
             # Очищаем потоки
-            if hasattr(self, 'model_thread'):
-                self.model_thread.quit()
-                self.model_thread.wait()
-
-            if hasattr(self, 'message_thread'):
+            if hasattr(self, 'message_thread') and self.message_thread is not None:
                 self.message_thread.quit()
                 self.message_thread.wait()
 
+            if hasattr(a0, 'accept'):
+                a0.accept()
         except Exception as e:
             logging.error(f"Ошибка при закрытии приложения: {str(e)}")
+            if hasattr(a0, 'accept'):
+                a0.accept()
 
-        event.accept()
-
-    def eventFilter(self, obj, event):
+    def eventFilter(self, a0, a1):
         """Обработка событий для поля ввода"""
-        if obj == self.message_input and event.type() == event.Type.KeyPress:
-            if event.key() == Qt.Key.Key_Return and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
-                self.send_message()
-                return True
-        return super().eventFilter(obj, event)
+        try:
+            if a0 == self.message_input and a1.type() == a1.Type.KeyPress:
+                key_event = a1
+                if hasattr(key_event, 'key') and hasattr(key_event, 'modifiers'):
+                    if key_event.key() == Qt.Key.Key_Return and not (key_event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                        self.send_message()
+                        return True
+        except Exception as e:
+            logging.warning(f"Ошибка в eventFilter: {e}")
+        return super().eventFilter(a0, a1)
 
     def _initialize_interface(self, main_layout):
         """Инициализация интерфейса"""
@@ -501,44 +380,6 @@ class ChatWindow(QMainWindow):
                 }
             """)
             left_layout.addWidget(self.model_status)
-
-            # Кнопки управления моделью
-            model_controls = QHBoxLayout()
-            self.start_model_btn = QPushButton("▶ Запустить")
-            self.start_model_btn.clicked.connect(self.start_model)
-            self.start_model_btn.setEnabled(False)
-            self.start_model_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #4CAF50;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 8px;
-                }
-                QPushButton:hover { background-color: #45a049; }
-                QPushButton:pressed { background-color: #3d8b40; }
-                QPushButton:disabled { background-color: #BDBDBD; }
-            """)
-            model_controls.addWidget(self.start_model_btn)
-
-            self.stop_model_btn = QPushButton("⏹ Остановить")
-            self.stop_model_btn.clicked.connect(self.stop_model)
-            self.stop_model_btn.setEnabled(False)
-            self.stop_model_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #f44336;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 8px;
-                }
-                QPushButton:hover { background-color: #da190b; }
-                QPushButton:pressed { background-color: #d32f2f; }
-                QPushButton:disabled { background-color: #BDBDBD; }
-            """)
-            model_controls.addWidget(self.stop_model_btn)
-
-            left_layout.addLayout(model_controls)
 
             # Кнопки настроек
             settings_layout = QHBoxLayout()
@@ -577,6 +418,23 @@ class ChatWindow(QMainWindow):
             """)
             settings_layout.addWidget(ollama_settings_btn)
 
+            # Кнопка оптимизации
+            optimize_btn = QPushButton("🔧 Оптимизация")
+            optimize_btn.clicked.connect(self._show_optimization_info)
+            optimize_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #FF9800;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                    margin-top: 10px;
+                }
+                QPushButton:hover { background-color: #F57C00; }
+                QPushButton:pressed { background-color: #EF6C00; }
+            """)
+            settings_layout.addWidget(optimize_btn)
+
             # Кнопка настроек Ollama
             jan_settings_btn = QPushButton("⚙ Jan")
             # jan_settings_btn.clicked.connect(self._show_jan_settings)
@@ -593,6 +451,23 @@ class ChatWindow(QMainWindow):
                 QPushButton:pressed { background-color: #512DA8; }
             """)
             settings_layout.addWidget(jan_settings_btn)
+
+            # Кнопка статистики сессии
+            stats_btn = QPushButton("📊 Статистика")
+            stats_btn.clicked.connect(self._show_session_stats)
+            stats_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px;
+                    margin-top: 10px;
+                }
+                QPushButton:hover { background-color: #45a049; }
+                QPushButton:pressed { background-color: #3d8b40; }
+            """)
+            settings_layout.addWidget(stats_btn)
 
             left_layout.addLayout(settings_layout)
 
@@ -643,6 +518,10 @@ class ChatWindow(QMainWindow):
             # Добавляем обработку клавиши Enter
             self.message_input.installEventFilter(self)
 
+            # Кнопки управления
+            buttons_layout = QHBoxLayout()
+            buttons_layout.setSpacing(10)
+
             send_button = QPushButton("Отправить")
             send_button.setObjectName("send_button")  # Добавляем имя для поиска
             send_button.setMinimumWidth(100)
@@ -667,9 +546,36 @@ class ChatWindow(QMainWindow):
                 }
             """)
             send_button.clicked.connect(self.send_message)
+            buttons_layout.addWidget(send_button)
+
+            # Кнопка остановки генерации
+            self.stop_generation_button = QPushButton("⏹ Стоп")
+            self.stop_generation_button.setMinimumWidth(80)
+            self.stop_generation_button.setEnabled(False)  # Изначально отключена
+            self.stop_generation_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #f44336;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 8px 16px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #da190b;
+                }
+                QPushButton:pressed {
+                    background-color: #d32f2f;
+                }
+                QPushButton:disabled {
+                    background-color: #BDBDBD;
+                }
+            """)
+            self.stop_generation_button.clicked.connect(self.stop_generation)
+            buttons_layout.addWidget(self.stop_generation_button)
 
             input_layout.addWidget(self.message_input)
-            input_layout.addWidget(send_button)
+            input_layout.addLayout(buttons_layout)
             chat_layout.addLayout(input_layout)
 
             splitter.addWidget(chat_panel)
@@ -678,6 +584,17 @@ class ChatWindow(QMainWindow):
             self.model_settings = ModelSettings()
             self.model_settings.setMinimumWidth(250)
             self.model_settings.setMaximumWidth(350)
+            self.model_settings.settings_saved.connect(self.on_model_settings_saved)
+
+            # Загружаем текущие настройки из API в интерфейс
+            current_settings = self.api.get_current_settings()
+            runtime_settings = current_settings.get('runtime_settings', {})
+            model_settings = current_settings.get('model_settings', {})
+
+            # Объединяем настройки для загрузки в интерфейс
+            interface_settings = {**runtime_settings, **model_settings}
+            self.model_settings.load_settings(interface_settings)
+
             splitter.addWidget(self.model_settings)
 
             # Настраиваем размеры сплиттера
@@ -736,7 +653,6 @@ class ChatWindow(QMainWindow):
                     self.model_combo.addItem("Нет установленных моделей")
                     self.update_model_status("Нет моделей", True)
                     self.current_model = None
-                    self.start_model_btn.setEnabled(False)
                     return
 
                 # Добавляем модели в список
@@ -750,15 +666,14 @@ class ChatWindow(QMainWindow):
                     if not name:
                         continue
 
-                    # Проверяем, запущена ли модель
-                    is_running = self.api.is_model_running(name)
-                    status = " (Запущена)" if is_running else ""
+                    # Модель считается готовой к работе, если она установлена
+                    # Загрузка в память происходит при первом запросе генерации
+                    status = " (Готова)"
 
                     self.model_combo.addItem(f"{name}{status} ({size})")
 
-                    # Если модель запущена, добавляем её в список запущенных
-                    if is_running:
-                        self.api.running_models.add(name)
+                    # Добавляем в список доступных моделей
+                    self.api.running_models.add(name)
 
                 # Восстанавливаем выбранную модель или выбираем первую
                 if current and current in new_models:
@@ -766,33 +681,15 @@ class ChatWindow(QMainWindow):
                     if index >= 0:
                         self.model_combo.setCurrentIndex(index)
                         self.current_model = current
-                        # Проверяем состояние модели
-                        if self.api.is_model_running(current):
-                            self.update_model_status(f"Модель активна: {current}")
-                            self.start_model_btn.setEnabled(False)
-                            self.stop_model_btn.setEnabled(True)
-                            self.model_combo.setEnabled(False)
-                        else:
-                            self.update_model_status(f"Модель выбрана: {current}")
-                            self.start_model_btn.setEnabled(True)
-                            self.stop_model_btn.setEnabled(False)
+                        # Модель готова к работе
+                        self.update_model_status(f"Модель готова: {current}")
                         logging.info(f"Восстановлена ранее выбранная модель: {current}")
                 elif self.model_combo.count() > 0:
-                    # self.model_combo.setCurrentIndex(0)
-                    # self.current_model = self.model_combo.currentText().split(" (")[0]
-                    # logging.info(
-                    #     f"Автоматически выбрана первая доступная модель: {self.current_model}")
-                    # # Проверяем состояние первой модели
-                    # if self.api.is_model_running(self.current_model):
-                    #     self.update_model_status(f"Модель активна: {self.current_model}")
-                    #     self.start_model_btn.setEnabled(False)
-                    #     self.stop_model_btn.setEnabled(True)
-                    #     self.model_combo.setEnabled(False)
-                    # else:
-                    #     self.update_model_status(f"Модель выбрана: {self.current_model}")
-                    #     self.start_model_btn.setEnabled(True)
-                    #     self.stop_model_btn.setEnabled(False)
-                    pass
+                    # Автоматически выбираем первую доступную модель
+                    self.model_combo.setCurrentIndex(0)
+                    self.current_model = self.model_combo.currentText().split(" (")[0]
+                    self.update_model_status(f"Модель готова: {self.current_model}")
+                    logging.info(f"Автоматически выбрана первая доступная модель: {self.current_model}")
 
             finally:
                 self.model_combo.blockSignals(False)
@@ -804,7 +701,10 @@ class ChatWindow(QMainWindow):
             self.model_combo.addItem(f"Ошибка: {str(e)}")
             self.update_model_status("Ошибка обновления", True)
             self.current_model = None
-            self.start_model_btn.setEnabled(False)
+            # Отключаем кнопку отправки при ошибке
+            send_button = self.findChild(QPushButton, "send_button")
+            if send_button:
+                send_button.setEnabled(False)
 
     def update_model_status(self, status: str, is_error: bool = False):
         """Обновление статуса модели"""
@@ -812,44 +712,29 @@ class ChatWindow(QMainWindow):
         self.model_status.setText(f"Статус: {status}")
         self.model_status.setStyleSheet(f"color: {color}; margin-top: 5px;")
 
-    def _update_buttons_state(self, is_running: bool):
-        """Обновление состояния кнопок в зависимости от состояния модели"""
-        if is_running:
-            # Модель запущена
-            self.start_model_btn.setEnabled(False)
-            self.stop_model_btn.setEnabled(True)
-            self.model_combo.setEnabled(True)  # Разрешаем смену модели на лету
-            # Активируем кнопку отправки
-            send_button = self.findChild(QPushButton, "send_button")
-            if send_button:
-                send_button.setEnabled(True)
-        else:
-            # Модель остановлена
-            self.start_model_btn.setEnabled(True)
-            self.stop_model_btn.setEnabled(False)
-            self.model_combo.setEnabled(True)
-            # Деактивируем кнопку отправки
-            send_button = self.findChild(QPushButton, "send_button")
-            if send_button:
-                send_button.setEnabled(False)
+    def _update_buttons_state(self, is_available: bool):
+        """Обновление состояния кнопок в зависимости от доступности модели"""
+        # Активируем/деактивируем кнопку отправки
+        send_button = self.findChild(QPushButton, "send_button")
+        if send_button:
+            send_button.setEnabled(is_available)
 
     def check_model_availability(self):
         """Проверка доступности модели"""
         if not self.current_model:
-            # Деактивируем кнопку отправки
-            # send_button = self.findChild(QPushButton, "send_button")
-            # if send_button:
-            #     send_button.setEnabled(False)
             QApplication.processEvents()
             return False
 
         try:
-            # Проверяем, запущена ли уже модель
-            is_running = self.api.is_model_running(self.current_model)
+            # Проверяем, установлена ли модель (доступна для использования)
+            models = self.api.get_models()
+            model_names = [model['name'] for model in models]
 
-            if is_running:
-                self.chat_history.add_system_message(f"✅ Модель {self.current_model} активна")
-                self.update_model_status(f"Модель активна: {self.current_model}")
+            if self.current_model in model_names:
+                # Модель установлена и доступна для генерации
+                # Загрузка в память произойдет при первом запросе
+                self.chat_history.add_system_message(f"✅ Модель {self.current_model} готова к работе")
+                self.update_model_status(f"Модель готова: {self.current_model}")
                 # Активируем кнопку отправки
                 send_button = self.findChild(QPushButton, "send_button")
                 if send_button:
@@ -858,24 +743,11 @@ class ChatWindow(QMainWindow):
                 self._update_buttons_state(True)
                 return True
             else:
-                # Пробуем запустить модель автоматически
-                success = self.api.run_model(self.current_model)
-                if success:
-                    self.chat_history.add_system_message(
-                        f"✅ Модель {self.current_model} запущена автоматически")
-                    self.update_model_status(f"Модель активна: {self.current_model}")
-                    send_button = self.findChild(QPushButton, "send_button")
-                    if send_button:
-                        send_button.setEnabled(True)
-                        QApplication.processEvents()
-                    self._update_buttons_state(True)
-                    return True
-                else:
-                    self.chat_history.add_system_message(
-                        f"❌ Не удалось запустить модель {self.current_model}")
-                    self.update_model_status(f"Ошибка запуска модели", True)
-                    self._update_buttons_state(False)
-                    return False
+                self.chat_history.add_system_message(
+                    f"❌ Модель {self.current_model} не установлена")
+                self.update_model_status(f"Модель не установлена", True)
+                self._update_buttons_state(False)
+                return False
 
         except Exception as e:
             error_msg = str(e)
@@ -909,9 +781,7 @@ class ChatWindow(QMainWindow):
             self.chat_history.add_system_message(f"🔄 Проверка модели: {self.current_model}")
             self.update_model_status("Проверка модели...")
 
-            # Временно отключаем кнопки во время проверки
-            self.start_model_btn.setEnabled(False)
-            self.stop_model_btn.setEnabled(False)
+            # Модель проверяется автоматически
 
             if self.check_model_availability():
                 # Состояние кнопок уже обновлено в check_model_availability
@@ -948,6 +818,8 @@ class ChatWindow(QMainWindow):
         send_button = self.findChild(QPushButton, "send_button")
         if send_button:
             send_button.setEnabled(False)
+        # Включаем кнопку остановки
+        self.stop_generation_button.setEnabled(True)
         # Добавляем сообщение пользователя
         self.chat_history.add_message(messages, True)
         self.message_input.clear()
@@ -956,6 +828,7 @@ class ChatWindow(QMainWindow):
         try:
             # Получаем все параметры модели
             params = self.model_settings.get_parameters()
+            logging.info(f"Параметры модели для генерации: {params}")
             # Сохраняем время начала генерации
             self.generation_start_time = time.time()
             self.total_tokens = 0
@@ -973,6 +846,11 @@ class ChatWindow(QMainWindow):
             self.message_thread.error.connect(self.on_message_error)
             self.message_thread.performance_info.connect(
                 lambda perf: self.chat_history.add_performance_info(perf))
+            # Подключаем сигнал расширенной статистики с проверкой
+            try:
+                self.message_thread.extended_stats.connect(self.on_extended_stats)
+            except Exception as e:
+                logging.warning(f"Не удалось подключить сигнал extended_stats: {e}")
             # Запускаем поток
             self.message_thread.start()
         except Exception as e:
@@ -985,28 +863,33 @@ class ChatWindow(QMainWindow):
         self.current_response += chunk
         """Обработка части ответа от модели"""
         self.chat_history.add_message_chunk(chunk)
-        self.total_tokens += 1  # Увеличиваем счетчик токенов
+        if self.total_tokens is not None:
+            self.total_tokens += 1  # Увеличиваем счетчик токенов
 
     def on_message_complete(self):
         """Обработка завершения генерации ответа"""
         # Собираем информацию о производительности
-        total_time = time.time() - self.generation_start_time
+        if self.generation_start_time is not None:
+            total_time = time.time() - self.generation_start_time
+        else:
+            total_time = 0.0
+
         performance_info = {
             'total_time': total_time,
-            'tokens': self.total_tokens,
+            'tokens': self.total_tokens or 0,
             'model': self.current_model
         }
 
         # Добавляем информацию о производительности в текущее сообщение
         # Вместо создания нового сообщения
-        self.message_thread.performance_info = performance_info  # Сохраняем данные
+        # Сохраняем данные для использования в add_message
 
         # Обновляем последнее сообщение (можно реализовать через сохранение ссылки)
         # Для простоты: перезаписываем последнее сообщение
         # ВАЖНО: эта часть требует доработки для корректного обновления
         # (например, хранить список сообщений и обновлять последний элемент)
         # Добавляем сообщение ассистента в историю
-        self.chat_history.add_message(self.current_response, False, self.message_thread.performance_info)
+        self.chat_history.add_message(self.current_response, False, performance_info)
         self.messages.append({"role": "assistant", "content": self.current_response})
         self.current_response = ""
 
@@ -1016,12 +899,33 @@ class ChatWindow(QMainWindow):
         send_button = self.findChild(QPushButton, "send_button")
         if send_button:
             send_button.setEnabled(True)
+        # Отключаем кнопку остановки
+        self.stop_generation_button.setEnabled(False)
         self.update_model_status(f"Готова к работе: {self.current_model}")
 
         # Отключаем поток
-        if hasattr(self, 'message_thread'):
+        if hasattr(self, 'message_thread') and self.message_thread is not None:
             self.message_thread.deleteLater()
             self.message_thread = None
+
+    def on_extended_stats(self, stats: dict):
+        """Обработка расширенной статистики"""
+        # Обновляем общую статистику сессии
+        if not hasattr(self, 'session_stats'):
+            self.session_stats = {
+                'total_input_tokens': 0,
+                'total_output_tokens': 0,
+                'total_generations': 0,
+                'total_time': 0.0
+            }
+
+        self.session_stats['total_input_tokens'] += stats.get('input_tokens', 0)
+        self.session_stats['total_output_tokens'] += stats.get('output_tokens', 0)
+        self.session_stats['total_generations'] += 1
+        self.session_stats['total_time'] += stats.get('total_time', 0.0)
+
+        # Обновляем отображение расширенной статистики
+        self.chat_history.add_extended_performance_info(stats)
 
     def on_message_error(self, error_msg: str):
         """Обработка ошибки при генерации ответа"""
@@ -1037,6 +941,8 @@ class ChatWindow(QMainWindow):
         send_button = self.findChild(QPushButton, "send_button")
         if send_button:
             send_button.setEnabled(True)
+        # Отключаем кнопку остановки
+        self.stop_generation_button.setEnabled(False)
 
         # Проверяем доступность модели после ошибки
         if not self.check_model_availability():
@@ -1048,121 +954,57 @@ class ChatWindow(QMainWindow):
                 False
             )
 
-    def start_model(self):
-        """Запуск модели"""
-        if not self.current_model:
-            logging.warning("Попытка запуска без выбранной модели")
-            QMessageBox.warning(self, "Ошибка", "Пожалуйста, выберите модель")
-            return
 
-        # Защита от повторного запуска
-        self.start_model_btn.setEnabled(False)
-        self.model_combo.setEnabled(False)
+    def stop_generation(self):
+        """Остановка текущей генерации"""
+        if hasattr(self, 'message_thread') and self.message_thread is not None:
+            logging.info("Остановка генерации по запросу пользователя")
+            self.message_thread.cancel()
+            self.chat_history.add_system_message("⏹️ Генерация остановлена")
+            # Разблокируем интерфейс
+            self.message_input.setReadOnly(False)
+            send_button = self.findChild(QPushButton, "send_button")
+            if send_button:
+                send_button.setEnabled(True)
+            self.stop_generation_button.setEnabled(False)
+            self.update_model_status(f"Готова к работе: {self.current_model}")
 
+    def on_model_settings_saved(self, settings: dict):
+        """Обработка сохранения настроек модели"""
         try:
-            logging.info(f"Запуск модели: {self.current_model}")
-            self.chat_history.add_message(
-                f"🚀 Запуск модели {self.current_model}...\n"
-                "⚠️ Это может занять некоторое время (30-60 секунд).\n"
-                "Пожалуйста, подождите...", False)
-            self.update_model_status("Запуск модели (это может занять время)...")
+            logging.info(f"Настройки модели сохранены: {settings}")
 
-            # Создаем и запускаем поток
-            self.model_thread = ModelThread(self.api, 'start', self.current_model)
-            self.model_thread.operation_complete.connect(self.on_model_operation_complete)
-            self.model_thread.start()
+            # Синхронизируем с системными настройками
+            sync_result = self.api.sync_with_user_settings(settings)
 
-            # Запускаем таймер для обновления точек загрузки
-            self.loading_timer = QTimer()
-            self.loading_dots = 0
-            self.loading_timer.timeout.connect(self.update_loading_status)
-            self.loading_timer.start(500)  # Каждые 500 мс
+            if sync_result['needs_restart']:
+                self.chat_history.add_system_message(
+                    f"🔄 Критические параметры изменены: {', '.join(sync_result['critical_params_changed'])}"
+                )
+                self.chat_history.add_system_message("🔄 Перезапуск сервера Ollama...")
+                self.update_model_status("Перезапуск сервера...")
 
-        except Exception as e:
-            error_msg = str(e)
-            logging.error(f"Ошибка запуска модели: {error_msg}")
-            self.update_model_status("Ошибка запуска", True)
-            self.chat_history.add_message(f"❌ Ошибка запуска модели: {error_msg}", False)
-            self.start_model_btn.setEnabled(True)
-            self.stop_model_btn.setEnabled(False)
-            self.model_combo.setEnabled(True)
+                # Проверяем статус сервера после перезапуска
+                import time
+                time.sleep(3)
 
-    def update_loading_status(self):
-        """Обновление статуса загрузки"""
-        self.loading_dots = (self.loading_dots + 1) % 4
-        dots = "." * self.loading_dots
-        self.update_model_status(f"Запуск модели{dots}")
-
-    def on_model_operation_complete(self, success: bool, message: str):
-        """Обработка завершения операции с моделью"""
-        # Останавливаем таймер загрузки, если он есть
-        if hasattr(self, 'loading_timer') and self.loading_timer.isActive():
-            self.loading_timer.stop()
-
-        if success:
-            if "запущена" in message:
-                self.update_model_status(f"Модель активна: {self.current_model}")
-                self.chat_history.add_message("✅ " + message, False)
-                self.stop_model_btn.setEnabled(True)
-                self.start_model_btn.setEnabled(False)
-                self.model_combo.setEnabled(False)
-                logging.info(f"Модель {self.current_model} успешно запущена")
-            else:  # остановлена
-                self.update_model_status(f"Модель выбрана: {self.current_model}")
-                self.chat_history.add_message("✅ " + message, False)
-                self.start_model_btn.setEnabled(True)
-                self.stop_model_btn.setEnabled(False)
-                self.model_combo.setEnabled(True)
-                logging.info(f"Модель {self.current_model} успешно остановлена")
-        else:
-            error_msg = message
-            if "запуск" in self.model_status.text().lower():
-                self.update_model_status("Ошибка запуска", True)
-                self.start_model_btn.setEnabled(True)
-                self.stop_model_btn.setEnabled(False)
-                self.model_combo.setEnabled(True)
+                # Проверяем доступность API
+                is_available, version = self.api.is_available()
+                if is_available:
+                    self.chat_history.add_system_message("✅ Сервер Ollama перезапущен и готов к работе")
+                    self.update_model_status(f"Модель готова: {self.current_model}")
+                else:
+                    self.chat_history.add_system_message("⚠️ Сервер Ollama не отвечает после перезапуска")
+                    self.update_model_status("Ошибка сервера", True)
             else:
-                self.update_model_status("Ошибка остановки", True)
-                self.stop_model_btn.setEnabled(True)
-                self.model_combo.setEnabled(False)
-            self.chat_history.add_message(f"❌ Ошибка: {error_msg}", False)
-            logging.error(f"Ошибка операции с моделью: {error_msg}")
+                self.chat_history.add_system_message("✅ Настройки модели применены")
 
-        # Отключаем поток
-        if hasattr(self, 'model_thread'):
-            self.model_thread.operation_complete.disconnect()
-            self.model_thread = None
-
-    def stop_model(self):
-        """Остановка модели"""
-        if not self.current_model:
-            return
-
-        # Защита от повторной остановки
-        self.stop_model_btn.setEnabled(False)
-        self.start_model_btn.setEnabled(False)
-
-        try:
-            logging.info(f"Остановка модели: {self.current_model}")
-            self.chat_history.add_message(f"🛑 Остановка модели {self.current_model}...", False)
-            self.update_model_status("Остановка модели...")
-
-            # Создаем и запускаем поток
-            self.model_thread = ModelThread(self.api, 'stop', self.current_model)
-            self.model_thread.operation_complete.connect(self.on_model_operation_complete)
-            self.model_thread.start()
-
-            # Обновляем состояние API
-            if self.current_model in self.api.running_models:
-                self.api.running_models.remove(self.current_model)
+            # Обновляем локальные настройки модели
+            self.model_settings.load_settings(settings)
 
         except Exception as e:
-            error_msg = str(e)
-            logging.error(f"Ошибка остановки модели: {error_msg}")
-            self.update_model_status("Ошибка остановки", True)
-            self.chat_history.add_message(f"❌ Ошибка остановки модели: {error_msg}", False)
-            self.stop_model_btn.setEnabled(True)
-            self.model_combo.setEnabled(False)
+            logging.error(f"Ошибка при сохранении настроек модели: {str(e)}")
+            self.chat_history.add_system_message(f"❌ Ошибка применения настроек: {str(e)}")
 
     def _toggle_model_settings(self):
         """Показать/скрыть панель настроек модели"""
@@ -1180,19 +1022,236 @@ class ChatWindow(QMainWindow):
             logging.error(f"Ошибка при открытии настроек Ollama: {str(e)}")
             QMessageBox.warning(self, "Ошибка", f"Не удалось открыть настройки: {str(e)}")
 
+    def _show_optimization_info(self):
+        """Показать информацию об оптимизации"""
+        try:
+            # Получаем информацию об оптимизации
+            optimization_info = self.api.get_current_settings()
 
-def _show_jan_settings(self):
-    """Открыть окно настроек Ollama"""
-    try:
-        # Сохраняем ссылку на окно как атрибут класса
-        if not hasattr(self, '_jan_settings_window'):
-            self._jan_settings_window = JanSettingsWindow()
-        self._jan_settings_window.show()
-        self._jan_settings_window.raise_()  # Поднимаем окно на передний план
-        self._jan_settings_window.activateWindow()  # Активируем окно
-    except Exception as e:
-        logging.error(f"Ошибка при открытии настроек Jan: {str(e)}")
-        QMessageBox.warning(self, "Ошибка", f"Не удалось открыть настройки: {str(e)}")
+            # Создаем диалоговое окно
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Информация об оптимизации")
+            dialog.setMinimumWidth(600)
+            dialog.setMinimumHeight(400)
+
+            layout = QVBoxLayout(dialog)
+
+            # Системная информация
+            system_group = QGroupBox("Системные характеристики")
+            system_layout = QFormLayout()
+
+            system_info = optimization_info.get('system_info', {})
+            system_layout.addRow("Платформа:", QLabel(str(system_info.get('platform', 'Неизвестно'))))
+            system_layout.addRow("Процессор:", QLabel(str(system_info.get('processor', 'Неизвестно'))))
+            system_layout.addRow("Ядер CPU:", QLabel(str(system_info.get('cpu_count', 'Неизвестно'))))
+            system_layout.addRow("Память (ГБ):", QLabel(str(system_info.get('memory_gb', 'Неизвестно'))))
+            system_layout.addRow("GPU:", QLabel(str(system_info.get('gpu', 'Неизвестно'))))
+            system_layout.addRow("Память GPU (ГБ):", QLabel(str(system_info.get('gpu_memory_gb', 'Неизвестно'))))
+
+            system_group.setLayout(system_layout)
+            layout.addWidget(system_group)
+
+            # Серверные настройки
+            server_group = QGroupBox("Серверные настройки")
+            server_layout = QFormLayout()
+
+            server_settings = optimization_info.get('server_settings', {})
+            for key, value in server_settings.items():
+                server_layout.addRow(key + ":", QLabel(str(value)))
+
+            server_group.setLayout(server_layout)
+            layout.addWidget(server_group)
+
+            # Runtime настройки
+            runtime_group = QGroupBox("Runtime настройки")
+            runtime_layout = QFormLayout()
+
+            runtime_settings = optimization_info.get('runtime_settings', {})
+            for key, value in runtime_settings.items():
+                runtime_layout.addRow(key + ":", QLabel(str(value)))
+
+            runtime_group.setLayout(runtime_layout)
+            layout.addWidget(runtime_group)
+
+            # Настройки модели
+            model_group = QGroupBox("Настройки модели")
+            model_layout = QFormLayout()
+
+            model_settings = optimization_info.get('model_settings', {})
+            for key, value in model_settings.items():
+                model_layout.addRow(key + ":", QLabel(str(value)))
+
+            model_group.setLayout(model_layout)
+            layout.addWidget(model_group)
+
+            # Кнопки
+            buttons_layout = QHBoxLayout()
+
+            reload_btn = QPushButton("🔄 Перезагрузить оптимизацию")
+            reload_btn.clicked.connect(lambda: self._reload_optimization(dialog))
+            buttons_layout.addWidget(reload_btn)
+
+            close_btn = QPushButton("Закрыть")
+            close_btn.clicked.connect(dialog.accept)
+            buttons_layout.addWidget(close_btn)
+
+            layout.addLayout(buttons_layout)
+
+            dialog.exec()
+
+        except Exception as e:
+            logging.error(f"Ошибка при отображении информации об оптимизации: {str(e)}")
+            QMessageBox.warning(self, "Ошибка", f"Не удалось отобразить информацию об оптимизации: {str(e)}")
+
+    def _reload_optimization(self, dialog):
+        """Перезагрузка оптимизации"""
+        try:
+            if self.api.reload_optimization():
+                QMessageBox.information(self, "Успешно", "Оптимизация перезагружена")
+                # Обновляем информацию в диалоге
+                self._show_optimization_info()
+                dialog.accept()
+            else:
+                QMessageBox.warning(self, "Ошибка", "Не удалось перезагрузить оптимизацию")
+        except Exception as e:
+            logging.error(f"Ошибка при перезагрузке оптимизации: {str(e)}")
+            QMessageBox.warning(self, "Ошибка", f"Ошибка при перезагрузке: {str(e)}")
+
+    def _apply_user_settings_to_server(self):
+        """Применение пользовательских настроек к серверу"""
+        try:
+            # Получаем текущие настройки модели
+            user_settings = self.model_settings.get_parameters()
+
+            # Синхронизируем с системными настройками
+            sync_result = self.api.sync_with_user_settings(user_settings)
+
+            if sync_result['needs_restart']:
+                self.chat_history.add_system_message(
+                    f"🔄 Критические параметры изменены: {', '.join(sync_result['critical_params_changed'])}"
+                )
+                self.chat_history.add_system_message("🔄 Применение настроек к серверу...")
+                self.update_model_status("Применение настроек...")
+
+                # Проверяем статус сервера
+                import time
+                time.sleep(2)
+
+                # Проверяем доступность API
+                is_available, version = self.api.is_available()
+                if is_available:
+                    self.chat_history.add_system_message("✅ Настройки применены к серверу")
+                    self.update_model_status(f"Модель готова: {self.current_model}")
+                else:
+                    self.chat_history.add_system_message("⚠️ Сервер не отвечает после применения настроек")
+                    self.update_model_status("Ошибка сервера", True)
+            else:
+                self.chat_history.add_system_message("✅ Настройки модели применены")
+
+        except Exception as e:
+            logging.error(f"Ошибка при применении настроек к серверу: {str(e)}")
+            self.chat_history.add_system_message(f"❌ Ошибка применения настроек: {str(e)}")
+
+
+    def _show_jan_settings(self):
+        """Открыть окно настроек Ollama"""
+        try:
+            # Сохраняем ссылку на окно как атрибут класса
+            if not hasattr(self, '_jan_settings_window'):
+                self._jan_settings_window = JanSettingsWindow()
+            self._jan_settings_window.show()
+            self._jan_settings_window.raise_()  # Поднимаем окно на передний план
+            self._jan_settings_window.activateWindow()  # Активируем окно
+        except Exception as e:
+            logging.error(f"Ошибка при открытии настроек Jan: {str(e)}")
+            QMessageBox.warning(self, "Ошибка", f"Не удалось открыть настройки: {str(e)}")
+
+    def _show_session_stats(self):
+        """Показать статистику сессии"""
+        try:
+            if not hasattr(self, 'session_stats') or not self.session_stats.get('total_generations', 0):
+                QMessageBox.information(self, "Статистика сессии", "Пока нет данных о генерациях")
+                return
+
+            stats = self.session_stats
+
+            # Создаем диалоговое окно
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Статистика сессии")
+            dialog.setMinimumWidth(500)
+            dialog.setMinimumHeight(300)
+
+            layout = QVBoxLayout(dialog)
+
+            # Заголовок
+            title_label = QLabel("📊 Общая статистика сессии")
+            title_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+            layout.addWidget(title_label)
+
+            # Статистика
+            stats_group = QGroupBox("Показатели")
+            stats_layout = QFormLayout()
+
+            total_generations = stats.get('total_generations', 0)
+            total_input = stats.get('total_input_tokens', 0)
+            total_output = stats.get('total_output_tokens', 0)
+            total_time = stats.get('total_time', 0.0)
+
+            avg_time = total_time / total_generations if total_generations > 0 else 0
+            avg_input = total_input / total_generations if total_generations > 0 else 0
+            avg_output = total_output / total_generations if total_generations > 0 else 0
+            total_tokens = total_input + total_output
+
+            stats_layout.addRow("Генераций:", QLabel(str(total_generations)))
+            stats_layout.addRow("Входных токенов:", QLabel(f"{total_input:,}"))
+            stats_layout.addRow("Выходных токенов:", QLabel(f"{total_output:,}"))
+            stats_layout.addRow("Всего токенов:", QLabel(f"{total_tokens:,}"))
+            stats_layout.addRow("Общее время:", QLabel(f"{total_time:.2f}с"))
+            stats_layout.addRow("Среднее время:", QLabel(f"{avg_time:.2f}с"))
+            stats_layout.addRow("Средний ввод:", QLabel(f"{avg_input:.0f} токенов"))
+            stats_layout.addRow("Средний вывод:", QLabel(f"{avg_output:.0f} токенов"))
+
+            stats_group.setLayout(stats_layout)
+            layout.addWidget(stats_group)
+
+            # Кнопки
+            buttons_layout = QHBoxLayout()
+
+            reset_btn = QPushButton("🔄 Сбросить статистику")
+            reset_btn.clicked.connect(lambda: self._reset_session_stats(dialog))
+            buttons_layout.addWidget(reset_btn)
+
+            close_btn = QPushButton("Закрыть")
+            close_btn.clicked.connect(dialog.accept)
+            buttons_layout.addWidget(close_btn)
+
+            layout.addLayout(buttons_layout)
+
+            dialog.exec()
+
+        except Exception as e:
+            logging.error(f"Ошибка при отображении статистики сессии: {str(e)}")
+            QMessageBox.warning(self, "Ошибка", f"Не удалось отобразить статистику: {str(e)}")
+
+    def _reset_session_stats(self, dialog):
+        """Сброс статистики сессии"""
+        reply = QMessageBox.question(
+            self,
+            "Подтверждение",
+            "Вы уверены, что хотите сбросить всю статистику сессии?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.session_stats = {
+                'total_input_tokens': 0,
+                'total_output_tokens': 0,
+                'total_generations': 0,
+                'total_time': 0.0
+            }
+            self.chat_history.add_system_message("📊 Статистика сессии сброшена")
+            dialog.accept()
 
     def clear_chat(self):
         """Очистка истории чата"""

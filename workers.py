@@ -39,6 +39,7 @@ class MessageThread(QThread):
     finished = pyqtSignal()  # Сигнал о завершении
     error = pyqtSignal(str)  # Сигнал об ошибке
     performance_info = pyqtSignal(dict)  # Сигнал с информацией о производительности
+    extended_stats = pyqtSignal(dict)  # Сигнал с расширенной статистикой
 
     def __init__(self, api, model, messages, **kwargs):
         super().__init__()
@@ -46,6 +47,7 @@ class MessageThread(QThread):
         self.model = model
         self.messages = messages
         self.kwargs = kwargs
+        self.is_cancelled = False
 
     def run(self):
         try:
@@ -55,15 +57,30 @@ class MessageThread(QThread):
             # Отправляем запрос в API
             full_response = []
             start_time = time.time()
-            for chunk in self.api.generate_stream(
-                    model=self.model,
-                    messages=api_messages,
-                    **self.kwargs
-            ):
-                if chunk:
-                    full_response.append(chunk)
-                    self.message_chunk.emit(chunk)
-            
+            try:
+                for chunk in self.api.generate_stream(
+                        model=self.model,
+                        messages=api_messages,
+                        **self.kwargs
+                ):
+                    if self.is_cancelled:
+                        logging.info("Генерация отменена пользователем")
+                        break
+                    if chunk:
+                        full_response.append(chunk)
+                        self.message_chunk.emit(chunk)
+            except Exception as stream_error:
+                logging.error(f"Ошибка в generate_stream: {stream_error}")
+                self.error.emit(str(stream_error))
+                return
+
+            # Получаем расширенную статистику из API
+            try:
+                extended_stats = self.api.get_last_generation_stats()
+            except Exception as stats_error:
+                logging.warning(f"Ошибка при получении статистики: {stats_error}")
+                extended_stats = {}
+
             # Добавляем информацию о производительности
             if full_response:
                 performance = {
@@ -72,10 +89,22 @@ class MessageThread(QThread):
                     "model": self.model
                 }
                 self.performance_info.emit(performance)
-            
+
+                # Отправляем расширенную статистику
+                if extended_stats:
+                    try:
+                        self.extended_stats.emit(extended_stats)
+                    except Exception as emit_error:
+                        logging.warning(f"Ошибка при отправке расширенной статистики: {emit_error}")
+
             self.finished.emit()
         except Exception as e:
+            logging.error(f"Ошибка в MessageThread.run(): {e}")
             self.error.emit(str(e))
+
+    def cancel(self):
+        """Отмена генерации"""
+        self.is_cancelled = True
 
     def closeEvent(self, event):
         """Обработка события закрытия окна"""

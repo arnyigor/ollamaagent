@@ -11,7 +11,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QVBoxLayout, QMessageBox, QComboBox, QFileDialog, QLabel, QDialog,
     QFormLayout, QLineEdit,
-    QHBoxLayout, QProgressBar
+    QHBoxLayout, QProgressBar, QGroupBox, QSpinBox, QDoubleSpinBox, QCheckBox
 )
 
 # from lmstudio_settings import LmStudioSettings
@@ -858,10 +858,8 @@ class OllamaSettings(QDialog):
         try:
             model_name = self.model_input.text().strip()
             if not model_name:
-                model_name = self.recommended_combo.currentText().split(" (")[0]
-                if not model_name:
-                    self.log("Ошибка: Не указано имя модели")
-                    return
+                self.log("Ошибка: Не указано имя модели")
+                return
 
             self.current_model = model_name
             self.worker = InstallWorker(model_name, self.install_dir)

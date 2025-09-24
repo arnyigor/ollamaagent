@@ -1,8 +1,8 @@
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QScrollArea, QWidget, QLabel,
     QGroupBox, QFormLayout, QDoubleSpinBox, QSpinBox,
-    QTextEdit
+    QTextEdit, QCheckBox, QPushButton, QHBoxLayout
 )
 
 MODEL_SETTINGS_STYLE = """
@@ -42,6 +42,8 @@ MODEL_SETTINGS_STYLE = """
 
 class ModelSettings(QFrame):
     """Панель настроек модели"""
+
+    settings_saved = pyqtSignal(dict)  # Сигнал с сохраненными настройками
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -173,6 +175,70 @@ class ModelSettings(QFrame):
         mirostat_group.setLayout(mirostat_layout)
         settings_layout.addWidget(mirostat_group)
 
+        # Настройки аппаратного обеспечения
+        hardware_group = QGroupBox("Настройки аппаратного обеспечения")
+        hardware_layout = QFormLayout()
+
+        # Количество потоков
+        self.num_thread_spin = QSpinBox()
+        self.num_thread_spin.setRange(1, 64)
+        self.num_thread_spin.setValue(4)
+        self.num_thread_spin.setToolTip("Количество потоков процессора для использования")
+        hardware_layout.addRow("Количество потоков:", self.num_thread_spin)
+
+        # Количество GPU
+        self.num_gpu_spin = QSpinBox()
+        self.num_gpu_spin.setRange(0, 8)
+        self.num_gpu_spin.setValue(1)
+        self.num_gpu_spin.setToolTip("Количество GPU для использования (0 - только CPU)")
+        hardware_layout.addRow("Количество GPU:", self.num_gpu_spin)
+
+        # Основной GPU
+        self.main_gpu_spin = QSpinBox()
+        self.main_gpu_spin.setRange(0, 7)
+        self.main_gpu_spin.setValue(0)
+        self.main_gpu_spin.setToolTip("Индекс основного GPU")
+        hardware_layout.addRow("Основной GPU:", self.main_gpu_spin)
+
+        # Слои GPU
+        self.gpu_layers_spin = QSpinBox()
+        self.gpu_layers_spin.setRange(0, 100)
+        self.gpu_layers_spin.setValue(0)
+        self.gpu_layers_spin.setToolTip("Количество слоев для загрузки на GPU")
+        hardware_layout.addRow("Слои GPU:", self.gpu_layers_spin)
+
+        # Контекст
+        self.num_ctx_spin = QSpinBox()
+        self.num_ctx_spin.setRange(512, 32768)
+        self.num_ctx_spin.setValue(2048)
+        self.num_ctx_spin.setToolTip("Максимальный размер контекста")
+        hardware_layout.addRow("Контекст:", self.num_ctx_spin)
+
+        # Низкая память VRAM
+        self.low_vram_check = QCheckBox()
+        self.low_vram_check.setChecked(False)
+        self.low_vram_check.setToolTip("Включить режим низкой памяти VRAM")
+        hardware_layout.addRow("Низкая память VRAM:", self.low_vram_check)
+
+        # Rope frequency base
+        self.rope_freq_base_spin = QDoubleSpinBox()
+        self.rope_freq_base_spin.setRange(0.0, 10000.0)
+        self.rope_freq_base_spin.setSingleStep(100.0)
+        self.rope_freq_base_spin.setValue(10000.0)
+        self.rope_freq_base_spin.setToolTip("Базовая частота RoPE")
+        hardware_layout.addRow("RoPE freq base:", self.rope_freq_base_spin)
+
+        # Rope frequency scale
+        self.rope_freq_scale_spin = QDoubleSpinBox()
+        self.rope_freq_scale_spin.setRange(0.0, 100.0)
+        self.rope_freq_scale_spin.setSingleStep(0.1)
+        self.rope_freq_scale_spin.setValue(1.0)
+        self.rope_freq_scale_spin.setToolTip("Масштаб частоты RoPE")
+        hardware_layout.addRow("RoPE freq scale:", self.rope_freq_scale_spin)
+
+        hardware_group.setLayout(hardware_layout)
+        settings_layout.addWidget(hardware_group)
+
         # Системный промпт
         system_group = QGroupBox("Системный промпт")
         system_layout = QVBoxLayout()
@@ -183,6 +249,28 @@ class ModelSettings(QFrame):
         system_group.setLayout(system_layout)
         settings_layout.addWidget(system_group)
 
+        # Кнопка сохранения настроек
+        save_button = QPushButton("Сохранить настройки")
+        save_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px;
+                font-weight: bold;
+                margin-top: 10px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:pressed {
+                background-color: #3d8b40;
+            }
+        """)
+        save_button.clicked.connect(self.save_settings)
+        settings_layout.addWidget(save_button)
+
         # Добавляем растягивающийся элемент в конец
         settings_layout.addStretch()
 
@@ -192,6 +280,14 @@ class ModelSettings(QFrame):
 
         # Стилизация
         self.setStyleSheet(MODEL_SETTINGS_STYLE)
+
+    def save_settings(self):
+        """Сохранение настроек модели"""
+        settings = self.get_parameters()
+        print(f"Сохранение настроек модели: {settings}")
+        self.settings_saved.emit(settings)
+        # Можно добавить визуальную обратную связь
+        print("Настройки модели сохранены")
 
     def get_parameters(self) -> dict:
         """Получение всех параметров модели"""
@@ -207,5 +303,59 @@ class ModelSettings(QFrame):
             'mirostat': self.mirostat_spin.value(),
             'mirostat_tau': self.mirostat_tau_spin.value(),
             'mirostat_eta': self.mirostat_eta_spin.value(),
+            'num_thread': self.num_thread_spin.value(),
+            'num_gpu': self.num_gpu_spin.value(),
+            'main_gpu': self.main_gpu_spin.value(),
+            'gpu_layers': self.gpu_layers_spin.value(),
+            'num_ctx': self.num_ctx_spin.value(),
+            'low_vram': self.low_vram_check.isChecked(),
+            'rope_frequency_base': self.rope_freq_base_spin.value(),
+            'rope_frequency_scale': self.rope_freq_scale_spin.value(),
             'system': self.system_prompt.toPlainText().strip()
         }
+
+    def load_settings(self, settings: dict):
+        """Загрузка настроек в интерфейс"""
+        try:
+            if 'temperature' in settings:
+                self.temp_spin.setValue(settings['temperature'])
+            if 'max_tokens' in settings:
+                self.tokens_spin.setValue(settings['max_tokens'])
+            if 'top_k' in settings:
+                self.top_k_spin.setValue(settings['top_k'])
+            if 'top_p' in settings:
+                self.top_p_spin.setValue(settings['top_p'])
+            if 'repeat_penalty' in settings:
+                self.repeat_penalty_spin.setValue(settings['repeat_penalty'])
+            if 'presence_penalty' in settings:
+                self.presence_penalty_spin.setValue(settings['presence_penalty'])
+            if 'frequency_penalty' in settings:
+                self.frequency_penalty_spin.setValue(settings['frequency_penalty'])
+            if 'tfs_z' in settings:
+                self.tfs_z_spin.setValue(settings['tfs_z'])
+            if 'mirostat' in settings:
+                self.mirostat_spin.setValue(settings['mirostat'])
+            if 'mirostat_tau' in settings:
+                self.mirostat_tau_spin.setValue(settings['mirostat_tau'])
+            if 'mirostat_eta' in settings:
+                self.mirostat_eta_spin.setValue(settings['mirostat_eta'])
+            if 'num_thread' in settings:
+                self.num_thread_spin.setValue(settings['num_thread'])
+            if 'num_gpu' in settings:
+                self.num_gpu_spin.setValue(settings['num_gpu'])
+            if 'main_gpu' in settings:
+                self.main_gpu_spin.setValue(settings['main_gpu'])
+            if 'gpu_layers' in settings:
+                self.gpu_layers_spin.setValue(settings['gpu_layers'])
+            if 'num_ctx' in settings:
+                self.num_ctx_spin.setValue(settings['num_ctx'])
+            if 'low_vram' in settings:
+                self.low_vram_check.setChecked(settings['low_vram'])
+            if 'rope_frequency_base' in settings:
+                self.rope_freq_base_spin.setValue(settings['rope_frequency_base'])
+            if 'rope_frequency_scale' in settings:
+                self.rope_freq_scale_spin.setValue(settings['rope_frequency_scale'])
+            if 'system' in settings:
+                self.system_prompt.setPlainText(settings['system'])
+        except Exception as e:
+            print(f"Ошибка загрузки настроек: {e}")
